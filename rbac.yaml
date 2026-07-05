@@ -1,0 +1,46 @@
+# samba-ad plugin 전용 SA + 최소권한(읽기 전용) — platform-status PoC의 default-SA 한계를
+# 제품 규약(UIPluginPackage.spec.serviceAccountName)으로 승격한 구현(감사 §3.1 확인사항 준수).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensphere-plugin-samba-ad
+  namespace: opensphere-system
+---
+# FoundationModel(cluster-scope) 읽기 — identity 모델 phase/observed/좌표.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: opensphere-plugin-samba-ad-fm-reader }
+rules:
+  - apiGroups: ["foundation.opensphere.io"]
+    resources: [foundationmodels]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: opensphere-plugin-samba-ad-fm-reader }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: opensphere-plugin-samba-ad-fm-reader }
+subjects:
+  - { kind: ServiceAccount, name: opensphere-plugin-samba-ad, namespace: opensphere-system }
+---
+# 실물(opensphere-foundation ns) 읽기 — samba/keycloak Deployment·pods·events.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-plugin-samba-ad-reader
+  namespace: opensphere-foundation
+rules:
+  - apiGroups: ["apps"]
+    resources: [deployments]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [pods, events]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-plugin-samba-ad-reader
+  namespace: opensphere-foundation
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: opensphere-plugin-samba-ad-reader }
+subjects:
+  - { kind: ServiceAccount, name: opensphere-plugin-samba-ad, namespace: opensphere-system }

@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 2,
+  "kind": "plugin",
+  "hostRef": "foundation",
+  "id": "samba-ad",
+  "version": "0.1.0",
+  "title": "Samba-AD",
+  "description": "workspace/사원 디렉터리(Samba AD DC) 관리 plugin — Foundation(host) 안층 마운트, 콘솔 DUPA 신뢰체인 적재.",
+  "entry": "ui-shell.plugin.js",
+  "entrySha256": "024ca4a2a851b1119b4805df683f0c2c5b3107f6bc52c6a5f98529818511128c",
+  "shellCompat": ">=0.2.0 <0.9.0",
+  "permissions": [
+    "page:register",
+    "api:proxy",
+    "manual:contribute"
+  ],
+  "nav": {
+    "band": "운영 Operate",
+    "label": "Samba-AD"
+  },
+  "designSystem": "clarity",
+  "apiBase": "/api/plugins/samba-ad"
+}

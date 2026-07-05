@@ -1,0 +1,52 @@
+# Samba-AD — 독립 plugin(D1 승격, 2026-07-06). 폴더=컨테이너=신뢰·서명 경계(OpenSphere-plugin-* 규약).
+# kind=plugin, hostRef=foundation(manifest) — 콘솔 DUPA 신뢰체인(이중 서명검증)으로 적재되되
+# registerPage 미호출로 mainShell 1단에 비노출, Foundation(host)이 안층에서 <osp-samba-ad> 마운트.
+# digest/sha256/keyId는 관리자 승인값 = 신뢰 루트(S1: digest는 sha256 필수 — CRD pattern 강제).
+apiVersion: plugins.opensphere.io/v1alpha1
+kind: UIPluginPackage
+metadata:
+  name: samba-ad
+  namespace: opensphere-system
+  labels: { opensphere.io/host-ref: foundation }
+spec:
+  displayName: "Samba-AD"
+  owner: platform-foundation
+  version: 0.1.0
+  description: "workspace/사원 디렉터리(Samba AD DC) 관리 plugin — Foundation 안층 마운트(hostRef=foundation)"
+  serviceAccountName: opensphere-plugin-samba-ad   # rbac.yaml — 전용 SA 최소권한(읽기)
+  image:
+    repository: ghcr.io/opensphere-platform/plugin-samba-ad
+    digest: sha256:104c4371ad3d42e2480a3e0b426c8c28e8a77aca613c00861fe3082891826074  # v1
+  nav:
+    band: "운영 Operate"
+    label: "Samba-AD"
+  manifest:
+    path: /plugins/ui-shell.manifest.json
+    sha256: "20f03c01bf1bb0ea38c80a0f4f880f06f077c7faf15e3ed4bea00671d0382f5b"
+    signaturePath: /plugins/ui-shell.manifest.json.sig
+  trust:
+    keyId: opensphere-plugins-v2
+  shellCompat: ">=0.2.0 <0.9.0"
+  permissions:
+    - page:register
+    - api:proxy
+    - manual:contribute
+  api:
+    basePath: /api/plugins/samba-ad
+---
+apiVersion: plugins.opensphere.io/v1alpha1
+kind: UIPluginRegistration
+metadata:
+  name: samba-ad
+  namespace: opensphere-system
+spec:
+  packageRef:
+    name: samba-ad
+  desiredState: Enabled
+  installPolicy:
+    createWorkload: true
+    createProxyRoute: true
+    exposeInNavigation: false   # host(Foundation) 안층 표시 — mainShell 1단 비노출(선언적 의도 표기)
+  approval:
+    requestedBy: cmars
+    reason: "D1 승격 — Samba-AD 독립 plugin(hostRef=foundation)"
