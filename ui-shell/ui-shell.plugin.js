@@ -81,14 +81,14 @@ class SambaAdElement extends HTMLElement {
       ${notDeployed}
       <div class="clr-row">
         ${this.card(`디렉터리 실물 <span class="os-mono">${esc('foundation-identity-samba')}</span>`, `
-          <table class="table os-kv"><tbody>${this.kv([
+          <table class="table"><tbody>${this.kv([
             ['상태', `<span class="label ${phasePill}">${esc(phase)}</span> ${w.found ? esc(`${w.readyReplicas}/${w.replicas} ready`) : ''}`],
             ['이미지', `<span class="os-mono">${esc(w.image)}</span>`],
             ['Node / 재시작', esc(`${w.node ?? '—'} / ${w.restarts ?? '—'}`)],
             ['데이터', `<span class="os-mono">PVC foundation-identity-samba-data</span> (SAM DB — 회수 시에도 보존)`],
           ])}</tbody></table>`)}
         ${this.card('연결 — 상위 서비스 소비점', `
-          <table class="table os-kv"><tbody>${this.kv([
+          <table class="table"><tbody>${this.kv([
             ['LDAP', `<span class="os-mono">${esc(m.ldapURL)}</span>`],
             ['Base DN', `<span class="os-mono">${esc(baseDn)}</span>`],
             ['LDAPS · Kerberos', '<span class="os-mono">:636 · :88</span>'],
@@ -101,7 +101,7 @@ class SambaAdElement extends HTMLElement {
           <p class="os-sub">관측 ${esc(m.observedAt)} · ${esc(m.controlPlane)}</p>`
           : '<p class="os-sub">FoundationModel/identity CR 없음 — deploy/foundationmodels.yaml 적용 필요.</p>')}
         ${this.card('소비자 — Keycloak federation', `
-          <table class="table os-kv"><tbody>${this.kv([
+          <table class="table"><tbody>${this.kv([
             ['Keycloak', `<span class="label ${d.keycloak?.found ? pill(d.keycloak.ready, true) : ''}">${d.keycloak?.found ? (d.keycloak.ready ? 'Running' : '기동 중') : '미배포'}</span> <span class="os-mono">${esc(d.keycloak?.name)}</span>`],
             ['연동', `User Federation → 이 LDAP(<span class="os-mono">${esc(m.ldapURL)}</span>)`],
           ])}</tbody></table>
