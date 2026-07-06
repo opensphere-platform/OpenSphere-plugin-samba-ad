@@ -263,9 +263,13 @@ class SambaAdElement extends HTMLElement {
       const res = await fetch(`${API_BASE}/api/samba`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`samba: HTTP ${res.status}`);
       this.render(await res.json());
-      this._bindStageNav();
+      this._bindLifecycleActions();
       const btn = this.querySelector('#sc-cfg-save');
       if (btn) btn.onclick = () => this._saveConfig();
+      const installSave = this.querySelector('#sc-install-save');
+      if (installSave) installSave.onclick = () => this._saveInstallInputs();
+      const installStart = this.querySelector('#sc-install-start');
+      if (installStart) installStart.onclick = () => this._startInstall();
       const bkSave = this.querySelector('#sc-bk-save');
       if (bkSave) bkSave.onclick = () => this._saveBackup();
       const bkNow = this.querySelector('#sc-bk-now');
@@ -281,6 +285,93 @@ class SambaAdElement extends HTMLElement {
   }
 
   // 설정 저장(도메인/replicas/storageClass/dnsForwarder) → FM/identity merge-patch(foundation 검증 경로).
+  async _saveInstallInputs() {
+    const status = this.querySelector('#sc-install-status');
+    if (tokenExpired()) { sessionExpiredMsg(status); return; }
+    const idt = osIdToken();
+    const val = (id) => (this.querySelector(id)?.value ?? '').trim();
+    const replicas = parseInt(val('#sc-install-replicas'), 10);
+    const pass = val('#sc-install-pass');
+    const pass2 = val('#sc-install-pass2');
+    const secretAlready = this.querySelector('#sc-install-secret-found')?.value === 'true';
+    if (!secretAlready && !pass) { if (status) status.textContent = 'Bootstrap domain password is required before install apply.'; return; }
+    if (pass || pass2) {
+      if (pass.length < 12) { if (status) status.textContent = 'Bootstrap password must be at least 12 characters.'; return; }
+      if (pass !== pass2) { if (status) status.textContent = 'Bootstrap password confirmation does not match.'; return; }
+    }
+    const base = foundationApiBase();
+    const cfg = { spec: { parameters: { samba: {
+      domain: val('#sc-install-domain') || 'OPENSPHERE.LOCAL',
+      replicas: Number.isInteger(replicas) ? replicas : 1,
+      storageClass: val('#sc-install-sc') || 'standard',
+      dnsForwarder: val('#sc-install-dns') || '8.8.8.8',
+    } } } };
+    if (status) status.textContent = 'Saving install inputs...';
+    try {
+      const fm = await fetch(`${base}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/merge-patch+json', 'x-os-id-token': idt },
+        body: JSON.stringify(cfg),
+      });
+      if (!fm.ok) {
+        const t = await fm.text().catch(() => '');
+        if (isAuthFail(fm.status, t)) { sessionExpiredMsg(status); return; }
+        if (status) status.textContent = `Config save failed HTTP ${fm.status}: ${t.slice(0, 120)}`;
+        return;
+      }
+      if (pass) {
+        const secret = {
+          apiVersion: 'v1',
+          kind: 'Secret',
+          metadata: { name: 'foundation-identity-samba-creds', namespace: 'opensphere-foundation', labels: { 'opensphere.io/plugin': 'samba-ad', 'opensphere.io/managed-by': 'foundation' } },
+          type: 'Opaque',
+          stringData: { 'domain-password': pass },
+        };
+        const sr = await this._ensureCR(base, idt, 'api/v1/namespaces/opensphere-foundation', 'secrets', 'foundation-identity-samba-creds', secret);
+        if (!sr.ok) {
+          if (isAuthFail(sr.status, sr.body)) { sessionExpiredMsg(status); return; }
+          if (status) status.textContent = `Bootstrap Secret save failed HTTP ${sr.status}: ${(sr.body || '').slice(0, 120)}`;
+          return;
+        }
+      }
+      if (status) status.textContent = 'Install inputs saved. Rechecking gate...';
+      setTimeout(() => this._load(), 1200);
+    } catch (e) { if (status) status.textContent = `Install input save failed: ${esc(e)}`; }
+  }
+
+  async _startInstall() {
+    const status = this.querySelector('#sc-install-status');
+    if (tokenExpired()) { sessionExpiredMsg(status); return; }
+    const idt = osIdToken();
+    const val = (id) => (this.querySelector(id)?.value ?? '').trim();
+    const replicas = parseInt(val('#sc-install-replicas'), 10);
+    const body = { spec: { desiredState: 'Installed', parameters: {
+      engines: { samba: 'enabled' },
+      samba: {
+        domain: val('#sc-install-domain') || 'OPENSPHERE.LOCAL',
+        replicas: Number.isInteger(replicas) ? replicas : 1,
+        storageClass: val('#sc-install-sc') || 'standard',
+        dnsForwarder: val('#sc-install-dns') || '8.8.8.8',
+      },
+    } } };
+    if (status) status.textContent = 'Starting install process...';
+    try {
+      const res = await fetch(`${foundationApiBase()}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/merge-patch+json', 'x-os-id-token': idt },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        if (isAuthFail(res.status, t)) { sessionExpiredMsg(status); return; }
+        if (status) status.textContent = `Install start failed HTTP ${res.status}: ${t.slice(0, 120)}`;
+        return;
+      }
+      if (status) status.textContent = 'Install requested. Foundation control-plane is reconciling Samba-AD.';
+      setTimeout(() => this._load(), 1500);
+    } catch (e) { if (status) status.textContent = `Install start failed: ${esc(e)}`; }
+  }
+
   async _saveConfig() {
     const status = this.querySelector('#sc-cfg-status');
     if (tokenExpired()) { sessionExpiredMsg(status); return; }
@@ -329,8 +420,8 @@ class SambaAdElement extends HTMLElement {
       const parts = location.pathname.split('/').filter(Boolean);
       const i = parts.indexOf('samba');
       const s = i >= 0 ? parts[i + 1] : '';
-      return s === 'install' || s === 'manage' ? s : 'preflight';
-    } catch { return 'preflight'; }
+      return s === 'preflight' || s === 'install' || s === 'manage' ? s : 'auto';
+    } catch { return 'auto'; }
   }
 
   stagePath(stage) {
@@ -338,11 +429,18 @@ class SambaAdElement extends HTMLElement {
     return `/p/foundation/samba${suffix}${location.search}${location.hash}`;
   }
 
-  _bindStageNav() {
-    this.querySelectorAll('[data-sc-stage]').forEach((el) => {
+  lifecycleStage(pf) {
+    const state = pf?.installState || 'Blocked';
+    if (state === 'Installed') return 'manage';
+    if (state === 'AwaitingInput' || state === 'AwaitingInstall' || state === 'ReadyToApply' || state === 'Deploying') return 'install';
+    return 'preflight';
+  }
+
+  _bindLifecycleActions() {
+    this.querySelectorAll('[data-sc-action]').forEach((el) => {
       el.addEventListener('click', (e) => {
         e.preventDefault();
-        const stage = el.getAttribute('data-sc-stage') || 'preflight';
+        const stage = el.getAttribute('data-sc-action') || 'preflight';
         history.pushState(history.state, '', this.stagePath(stage));
         this._load().then(() => {
           if (stage === 'manage') { this._loadCharts(); this._loadLogs(); this._loadBackup(); }
@@ -353,12 +451,14 @@ class SambaAdElement extends HTMLElement {
 
   stageNav(active, pf) {
     const state = pf?.installState || 'Unknown';
-    const activeCls = (s) => active === s ? 'btn-primary' : 'btn-outline';
+    const cls = (s) => active === s ? 'label-info' : '';
+    const done = (s) => (s === 'preflight' && ['AwaitingInput', 'AwaitingInstall', 'ReadyToApply', 'Deploying', 'Installed'].includes(state))
+      || (s === 'install' && ['Deploying', 'Installed'].includes(state));
     return `<div class="os-actions">
-      <button class="btn btn-sm ${activeCls('preflight')}" data-sc-stage="preflight">Preflight</button>
-      <button class="btn btn-sm ${activeCls('install')}" data-sc-stage="install">Install</button>
-      <button class="btn btn-sm ${activeCls('manage')}" data-sc-stage="manage">Manage</button>
-      <span class="os-sub">installState=${esc(state)}</span>
+      <span class="label ${cls('preflight')}">${done('preflight') ? 'Done' : 'Now'}: Preflight</span>
+      <span class="label ${cls('install')}">${done('install') ? 'Done' : (active === 'install' ? 'Now' : 'Next')}: Install</span>
+      <span class="label ${cls('manage')}">${state === 'Installed' ? 'Now' : 'Locked'}: Manage</span>
+      <span class="os-sub">lifecycle=${esc(state)}</span>
     </div>`;
   }
 
@@ -384,6 +484,10 @@ class SambaAdElement extends HTMLElement {
       </tr>`).join('');
     const banner = pf.installState === 'ReadyToApply'
       ? '<div class="alert alert-success"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Preflight passed. Foundation control-plane can apply /operand/manifests to deploy the Samba-AD operand.</span></div></div></div>'
+      : pf.installState === 'AwaitingInstall'
+        ? '<div class="alert alert-success"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Preflight passed. Continue to Install to confirm inputs and start the lifecycle transition.</span></div></div></div>'
+        : pf.installState === 'AwaitingInput'
+          ? '<div class="alert alert-warning"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Preflight passed, but install inputs are still required before apply.</span></div></div></div>'
       : pf.installState === 'Blocked'
         ? '<div class="alert alert-danger"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Preflight is blocked. Resolve BLOCK items before operand deployment.</span></div></div></div>'
         : pf.installState === 'Deploying'
@@ -401,9 +505,12 @@ class SambaAdElement extends HTMLElement {
 
   renderPreflight(d) {
     const pf = d.preflight || {};
-    const next = pf.blockers === 0
-      ? '<button class="btn btn-primary btn-sm" data-sc-stage="install">Install 단계로 이동</button>'
-      : '<button class="btn btn-primary btn-sm" disabled>BLOCK 해소 후 Install 가능</button>';
+    const installed = pf.installState === 'Installed';
+    const next = installed
+      ? '<button class="btn btn-primary btn-sm" data-sc-action="manage">Open current Manage stage</button>'
+      : (pf.blockers === 0
+        ? '<button class="btn btn-primary btn-sm" data-sc-action="install">Continue to Install inputs</button>'
+        : '<button class="btn btn-primary btn-sm" disabled>Resolve BLOCK items first</button>');
     this.innerHTML = `
       <div class="os-title-row"><h2 class="os-h2">Samba-AD Preflight <span class="label label-info">Day-0</span></h2></div>
       <p class="os-sub">Samba-AD operand를 배포하기 전에 FoundationModel, engine option, realm, StorageClass, secret reference, 소비자 준비 상태를 확인합니다.</p>
@@ -419,6 +526,9 @@ class SambaAdElement extends HTMLElement {
   renderInstall(d) {
     const pf = d.preflight || {};
     const installed = pf.installState === 'Installed';
+    const secret = d.bootstrapSecret || {};
+    const canApply = !!pf.readyToApply;
+    const scInstall = this._scSelect(d).replace('id="sc-cfg-sc"', 'id="sc-install-sc"');
     this.innerHTML = `
       <div class="os-title-row"><h2 class="os-h2">Samba-AD Install <span class="label label-info">Day-1</span></h2></div>
       <p class="os-sub">Preflight 이후 Samba-AD operand 선언을 control-plane이 적용하는 설치 단계입니다.</p>
@@ -427,23 +537,39 @@ class SambaAdElement extends HTMLElement {
         <div class="alert-item static"><span class="alert-text">${installed
           ? 'Samba-AD operand는 이미 설치되어 있습니다. 설치 후 운영은 Manage 단계에서 확인하세요.'
           : (pf.blockers === 0
-            ? 'Install gate is open. control-plane can apply /operand/manifests for Samba-AD.'
+            ? 'Install gate is open. Confirm inputs, then start install to enable Samba-AD and let the control-plane apply /operand/manifests.'
             : 'Install gate is blocked. Return to Preflight and resolve BLOCK items first.')}</span></div>
       </div></div>
       <div class="clr-row">
         ${this.card('Install gate', `
           <table class="table"><tbody>${this.kv([
             ['Preflight blockers', `<span class="label ${pf.blockers ? 'label-danger' : 'label-success'}">${esc(pf.blockers ?? '—')}</span>`],
+            ['Install input blockers', `<span class="label ${pf.inputBlockers ? 'label-warning' : 'label-success'}">${esc(pf.inputBlockers ?? 0)}</span>`],
             ['Warnings', `<span class="label ${pf.warnings ? 'label-warning' : 'label-success'}">${esc(pf.warnings ?? '—')}</span>`],
+            ['Bootstrap Secret', `<span class="label ${secret.found ? 'label-success' : 'label-warning'}">${secret.found ? 'Present' : 'Missing'}</span> <span class="os-mono">${esc(secret.name || 'foundation-identity-samba-creds')}/${esc(secret.key || 'domain-password')}</span>`],
             ['Operand declaration', '<span class="os-mono">GET /operand/manifests</span>'],
             ['Apply owner', 'Foundation control-plane (SSA)'],
+            ['Apply gate', `<span class="label ${canApply ? 'label-success' : 'label-warning'}">${canApply ? 'ReadyToApply' : esc(pf.installState || 'Unknown')}</span>`],
           ])}</tbody></table>`) }
-        ${this.card('Install actions', `
-          <p class="os-sub">현재 구현은 설치 게이트 확인 단계입니다. 실제 apply는 Foundation control-plane의 선언형 reconciler가 수행해야 하며, plugin UI가 직접 kubectl apply를 실행하지 않습니다.</p>
+        ${this.card(installed ? 'Install completed' : 'Install inputs', installed ? `
+          <p class="os-sub">Samba-AD is already installed. Lifecycle cannot move backward from Manage to Install. Use Manage for drift checks and operations.</p>
+          <div class="os-actions"><button class="btn btn-sm btn-primary" data-sc-action="manage">Open Manage</button></div>`
+          : `
+          <input id="sc-install-secret-found" type="hidden" value="${secret.found ? 'true' : 'false'}">
+          <div class="clr-row">
+            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">Directory realm<input id="sc-install-domain" class="os-filter" value="${esc((d.config || {}).domain)}"></label></div>
+            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">StorageClass${scInstall}</label></div>
+            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">DNS forwarder<input id="sc-install-dns" class="os-filter" value="${esc((d.config || {}).dnsForwarder)}"></label></div>
+            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">Replicas<input id="sc-install-replicas" class="os-filter" type="number" min="1" value="${esc((d.config || {}).replicas)}"></label></div>
+            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">Bootstrap domain password<input id="sc-install-pass" class="os-filter" type="password" autocomplete="new-password" placeholder="${secret.found ? 'leave blank to keep existing Secret' : 'required'}"></label></div>
+            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">Confirm password<input id="sc-install-pass2" class="os-filter" type="password" autocomplete="new-password"></label></div>
+          </div>
+          <p class="os-sub">Password is written only to Kubernetes Secret stringData and is never returned by the plugin API or operand manifest.</p>
           <div class="os-actions">
-            <button class="btn btn-sm btn-outline" data-sc-stage="preflight">Preflight 다시 확인</button>
-            <button class="btn btn-sm btn-primary" data-sc-stage="manage"${installed ? '' : ' disabled'}>Manage로 이동</button>
-          </div>`) }
+            <button id="sc-install-save" class="btn btn-sm btn-outline">Save install inputs</button>
+            <button id="sc-install-start" class="btn btn-sm btn-primary"${pf.blockers || pf.inputBlockers ? ' disabled' : ''}>Start install</button>
+          </div>
+          <p id="sc-install-status" class="os-sub"></p>`) }
       </div>`;
   }
 
@@ -456,7 +582,8 @@ class SambaAdElement extends HTMLElement {
   }
 
   render(d) {
-    const stage = this.stage();
+    const requestedStage = this.stage();
+    const stage = requestedStage === 'auto' ? this.lifecycleStage(d.preflight) : requestedStage;
     if (stage === 'preflight') { this.renderPreflight(d); return; }
     if (stage === 'install') { this.renderInstall(d); return; }
 
@@ -600,9 +727,13 @@ const MANUAL_DOCS = [
       '- 단일 DC(replicas 1, Recreate) — pod IP 변경 시 DNS 자기등록 특성의 dev 수용.',
       '',
       '## Preflight',
+      '- Preflight/Install/Manage는 사용자가 임의로 오가는 탭이 아니라 Samba-AD operand lifecycle 상태다. 기본 `/p/foundation/samba` 진입은 현재 lifecycle 상태로 해석한다.',
+      '- 설치 완료 후에는 Install로 역진하지 않는다. 과거 단계 URL을 열어도 상태 확인 또는 현재 Manage 단계로 유도하는 용도이며, 운영 조작은 Manage에서 수행한다.',
       '- Preflight는 plugin 이미지 배포 전 점검이 아니라, plugin 컨테이너가 뜬 뒤 Samba-AD operand 배포 전에 수행하는 day-0 점검이다.',
       '- UI 상단 Preflight 섹션과 `os ad preflight`가 같은 판정 모델을 사용한다.',
-      '- BLOCK 항목이 0개이면 control-plane은 `/operand/manifests`를 SSA apply하여 PVC/Service/Deployment/NetworkPolicy를 배포할 수 있다.',
+      '- BLOCK 항목이 0개이면 Install 단계로 진행하여 realm, StorageClass, DNS forwarder, replicas, Bootstrap domain password를 확정한다.',
+      '- Bootstrap domain password는 `foundation-identity-samba-creds/domain-password` Secret으로만 저장하며 plugin API와 `/operand/manifests` 응답에는 절대 평문으로 반환하지 않는다.',
+      '- Install 입력과 Bootstrap Secret이 준비되면 control-plane은 `/operand/manifests`를 SSA apply하여 PVC/Service/Deployment/NetworkPolicy를 배포할 수 있다.',
       '- 이미 operand가 설치된 경우 Preflight는 `Installed/manage` 모드로 남아 FoundationModel, engines.samba, StorageClass, realm, Keycloak, workload drift를 계속 확인한다.',
       '- dev/bootstrap 보안 프로필(`privileged`, `INSECURELDAP`, `NOCOMPLEXITY`)은 WARN으로 유지한다. production hardening은 별도 단계에서 제거해야 한다.',
       '',

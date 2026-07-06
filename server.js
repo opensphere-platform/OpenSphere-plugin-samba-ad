@@ -154,13 +154,14 @@ function sambaPreflight(payload) {
   const domainOk = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(domain);
   const dnsOk = !!String(cfg.dnsForwarder || '').trim();
   const engineEnabled = m.engineOpt !== 'disabled';
+  const secretReady = !!payload.bootstrapSecret?.found;
   const check = (id, label, state, message) => ({ id, label, state, message });
   const checks = [
     check('plugin-api', 'Plugin API', 'pass', `Samba-AD plugin backend is reachable (${payload.meta?.servedBy || 'unknown'}).`),
     check('foundation-model', 'FoundationModel/identity', m.found ? 'pass' : 'fail',
       m.found ? `model phase=${m.phase || 'unknown'}` : `FoundationModel/identity is not readable (HTTP ${m.status || 'unknown'}).`),
-    check('engine-option', 'engines.samba', engineEnabled ? 'pass' : 'fail',
-      engineEnabled ? `engine option=${m.engineOpt || 'enabled'}` : 'engine option is disabled; enable Samba-AD from Foundation Plugins before applying the operand.'),
+    check('engine-option', 'engines.samba', engineEnabled ? 'pass' : 'info',
+      engineEnabled ? `engine option=${m.engineOpt || 'enabled'}` : 'engine option is disabled; Install step will enable Samba-AD before the control-plane applies the operand.'),
     check('domain-realm', 'Directory realm', domainOk ? 'pass' : 'fail',
       domainOk ? `realm=${domain}` : 'realm must be an FQDN-like value such as OPENSPHERE.LOCAL.'),
     check('storage-class', 'StorageClass', storageClassKnown ? 'pass' : (selectedStorageClass ? 'warn' : 'fail'),
@@ -171,8 +172,10 @@ function sambaPreflight(payload) {
       dnsOk ? `dnsForwarder=${cfg.dnsForwarder}` : 'dnsForwarder is empty.'),
     check('replica-mode', 'Replica mode', replicas === 1 ? 'pass' : 'warn',
       replicas === 1 ? 'single DC/Recreate mode' : `replicas=${replicas}; current Samba-AD operand is designed for single DC mode.`),
-    check('domain-secret', 'Domain password Secret', 'info',
-      `${SAMBA_CREDS_SECRET}/${SAMBA_CREDS_KEY} is referenced by secretKeyRef; value is intentionally not exposed by the plugin.`),
+    check('domain-secret', 'Domain password Secret', secretReady ? 'pass' : 'warn',
+      secretReady
+        ? `${SAMBA_CREDS_SECRET}/${SAMBA_CREDS_KEY} exists and is referenced by secretKeyRef; value is intentionally not exposed by the plugin.`
+        : `${SAMBA_CREDS_SECRET}/${SAMBA_CREDS_KEY} is not present yet; create it from the Install input step before apply.`),
     check('operand-render', 'Operand manifest', 'pass',
       `/operand/manifests renders PVC, Service, Deployment, and NetworkPolicy for ${SAMBA}.`),
     check('security-profile', 'Security profile', 'warn',
@@ -184,11 +187,17 @@ function sambaPreflight(payload) {
   ];
   const blockers = checks.filter((c) => c.state === 'fail').length;
   const warnings = checks.filter((c) => c.state === 'warn').length;
+  const inputBlockers = secretReady ? 0 : 1;
+  const installState = w.found
+    ? (w.ready ? 'Installed' : 'Deploying')
+    : (blockers > 0 ? 'Blocked' : (inputBlockers > 0 ? 'AwaitingInput' : (engineEnabled ? 'ReadyToApply' : 'AwaitingInstall')));
   return {
-    mode: w.found ? 'manage' : 'preflight',
+    mode: w.found ? 'manage' : (blockers > 0 ? 'preflight' : 'install'),
     readyToInstall: blockers === 0 && !w.found,
-    installState: w.found ? (w.ready ? 'Installed' : 'Deploying') : (blockers === 0 ? 'ReadyToApply' : 'Blocked'),
+    readyToApply: blockers === 0 && inputBlockers === 0 && engineEnabled && !w.found,
+    installState,
     blockers,
+    inputBlockers,
     warnings,
     checks,
   };
@@ -197,13 +206,14 @@ function sambaPreflight(payload) {
 async function sambaPayload() {
   const sel = encodeURIComponent(`app=${SAMBA}`);
   const fsel = encodeURIComponent(`involvedObject.name=${SAMBA}`);
-  const [fm, dep, kcDep, pods, events, scList] = await Promise.all([
+  const [fm, dep, kcDep, pods, events, scList, secret] = await Promise.all([
     k8sGet('/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity'),
     k8sGet(`/apis/apps/v1/namespaces/${FND_NS}/deployments/${SAMBA}`),
     k8sGet(`/apis/apps/v1/namespaces/${FND_NS}/deployments/${KEYCLOAK}`),
     k8sGet(`/api/v1/namespaces/${FND_NS}/pods?labelSelector=${sel}`),
     k8sGet(`/api/v1/namespaces/${FND_NS}/events?fieldSelector=${fsel}&limit=15`),
     k8sGet('/apis/storage.k8s.io/v1/storageclasses'),
+    k8sGet(`/api/v1/namespaces/${FND_NS}/secrets/${SAMBA_CREDS_SECRET}`),
   ]);
   // 설정 폼 StorageClass 드롭다운 — 클러스터 실 목록(기본 SC 표시). 조회 실패 시 빈 배열(폼은 현재값만).
   const storageClasses = scList.__status ? [] : (scList.items || []).map((s) => ({
@@ -252,6 +262,7 @@ async function sambaPayload() {
     meta: { service: 'opensphere-plugin-samba-ad', version: VERSION, servedBy: process.env.HOSTNAME || 'unknown', time: new Date().toISOString(), ns: FND_NS },
     model,
     config,
+    bootstrapSecret: { name: SAMBA_CREDS_SECRET, key: SAMBA_CREDS_KEY, found: !secret.__status, status: secret.__status || 200 },
     backup,
     storageClasses,
     workload: workloadView(dep, pods),
