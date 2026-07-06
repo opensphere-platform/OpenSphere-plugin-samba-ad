@@ -1,0 +1,18 @@
+# samba-ad plugin /metrics → kube-prometheus-stack 연결(self-contained 2단계, 2026-07-06).
+# kps(monitoring ns)는 빈 셀렉터라 전 ns의 ServiceMonitor를 스크레이프 → 이 SM이 samba-ad plugin svc의
+# /metrics(8080)를 30s마다 긁는다. plugin이 소유하는 아티팩트(kubectl apply -f servicemonitor.yaml).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: samba-ad
+  namespace: opensphere-system
+  labels: { app: samba-ad }
+spec:
+  selector:
+    matchLabels: { opensphere.io/dupa-plugin: samba-ad }  # DUPA controller가 만든 plugin Service 라벨
+  namespaceSelector:
+    matchNames: [opensphere-system]
+  endpoints:
+    - targetPort: 8080
+      path: /metrics
+      interval: 30s

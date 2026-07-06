@@ -8,6 +8,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
 
 const PORT = process.env.PORT || 8080;
 const PLUGIN_DIR = process.env.PLUGIN_DIR || '/plugins';
@@ -135,12 +136,21 @@ async function sambaPayload() {
         observedAt: fm.status?.observedAt || '',
         engineOpt: fm.spec?.parameters?.engines?.samba || 'enabled',
       };
+  // 현재 설정(3단계 설정 폼이 표시·편집) — FM/identity.spec.parameters.samba(없으면 기본값).
+  const sp = (!fm.__status && fm.spec?.parameters?.samba) || {};
+  const config = {
+    domain: sp.domain || SAMBA_DEFAULTS.domain,
+    replicas: Number.isInteger(sp.replicas) ? sp.replicas : SAMBA_DEFAULTS.replicas,
+    storageClass: sp.storageClass || SAMBA_DEFAULTS.storageClass,
+    dnsForwarder: sp.dnsForwarder || SAMBA_DEFAULTS.dnsForwarder,
+  };
   const evs = (events.items || [])
     .map((e) => ({ type: e.type, reason: e.reason, message: e.message, time: e.lastTimestamp || e.eventTime || '' }))
     .sort((a, b) => String(b.time).localeCompare(String(a.time)));
   return {
     meta: { service: 'opensphere-plugin-samba-ad', version: VERSION, servedBy: process.env.HOSTNAME || 'unknown', time: new Date().toISOString(), ns: FND_NS },
     model,
+    config,
     workload: workloadView(dep, pods),
     keycloak: kcDep.__status ? { found: false } : { found: true, ready: (kcDep.status?.readyReplicas ?? 0) >= 1, name: KEYCLOAK },
     events: evs,
@@ -166,10 +176,64 @@ function cliManifest() {
   };
 }
 
+// ── kube-prometheus-stack 연결(2026-07-06) ──
+// /metrics: samba operand 실 신호를 Prometheus exposition으로 노출 → ServiceMonitor(servicemonitor.yaml)로
+//   kps가 스크레이프. 위조 0(readyReplicas·restarts·TCP dial 등 실측만).
+// /api/metrics/range: UI 차트용 — kps range API 프록시(시계열).
+const PROM = process.env.PROMETHEUS_URL || 'http://kps-prometheus.monitoring.svc:9090';
+function tcpProbe(host, port, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const s = new net.Socket();
+    let done = false;
+    const fin = (ok) => { if (!done) { done = true; try { s.destroy(); } catch {} resolve(ok); } };
+    s.setTimeout(timeoutMs);
+    s.once('connect', () => fin(true));
+    s.once('timeout', () => fin(false));
+    s.once('error', () => fin(false));
+    s.connect(port, host);
+  });
+}
+async function metricsText() {
+  const p = await sambaPayload().catch(() => ({}));
+  const w = p.workload || {}, m = p.model || {};
+  const ldap = await tcpProbe(`${SAMBA}.${FND_NS}.svc`, 389).catch(() => false);
+  const g = (name, help, val, type = 'gauge') =>
+    `# HELP ${name} ${help}\n# TYPE ${name} ${type}\n${name}{plugin="samba-ad"} ${val}\n`;
+  return [
+    g('samba_ad_up', 'Samba-AD DC ready(1)/not(0)', w.ready ? 1 : 0),
+    g('samba_ad_replicas_ready', 'ready replicas', w.readyReplicas || 0),
+    g('samba_ad_replicas_desired', 'desired replicas', w.replicas || 0),
+    g('samba_ad_restarts_total', 'container restarts', w.restarts || 0, 'counter'),
+    g('samba_ad_ldap_reachable', 'LDAP :389 TCP reachable', ldap ? 1 : 0),
+    g('samba_ad_model_installed', 'FoundationModel/identity phase==Installed', m.phase === 'Installed' ? 1 : 0),
+    g('samba_ad_keycloak_federation_up', 'Keycloak(federation 소비자) ready', p.keycloak && p.keycloak.ready ? 1 : 0),
+  ].join('');
+}
+async function promRange(query, minutes) {
+  const end = Math.floor(Date.now() / 1000);
+  const start = end - Math.max(1, minutes) * 60;
+  const step = Math.max(15, Math.floor((end - start) / 120));
+  const u = `${PROM}/api/v1/query_range?query=${encodeURIComponent(query)}&start=${start}&end=${end}&step=${step}`;
+  const r = await fetch(u);
+  if (!r.ok) return { __status: r.status };
+  return r.json();
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
     if (url.pathname === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('ok'); }
+    if (url.pathname === '/metrics') {
+      res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });
+      return res.end(await metricsText());
+    }
+    if (url.pathname === '/api/metrics/range') {
+      const q = url.searchParams.get('q') || 'samba_ad_up{plugin="samba-ad"}';
+      const minutes = parseInt(url.searchParams.get('minutes') || '30', 10);
+      const out = await promRange(q, minutes);
+      res.writeHead(out.__status ? 502 : 200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify(out.__status ? { error: `prometheus HTTP ${out.__status}` } : out));
+    }
     if (url.pathname === '/api/samba') {
       const payload = await sambaPayload();
       res.writeHead(200, { 'content-type': 'application/json' });

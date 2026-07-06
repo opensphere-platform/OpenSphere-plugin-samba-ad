@@ -27,5 +27,17 @@ docker build -t ghcr.io/opensphere-platform/plugin-samba-ad:vN . && docker push 
 kubectl apply -f rbac.yaml && kubectl apply -f uipluginpackage.yaml
 ```
 
-operand(Samba AD DC 자체)의 배포 선언은 Foundation control-plane identity 번들 소관
-(`OpenSphere-shell-foundation/backend/control-plane/identity_bundle.yaml`) — 이 레포는 **관리 UI와 그 신뢰 경계**만 소유한다.
+## self-contained(2026-07-06) — 이 레포가 Samba-AD의 전 기능을 소유
+
+사용자 결정(self-contained)에 따라 operand 배포·관측·설정까지 이 한 레포로 이전:
+
+| 축 | 구현 | 위치 |
+|---|---|---|
+| **operand 배포 선언**(PVC/Deployment/도메인/replicas/NetworkPolicy) | `server.js` `buildOperand()` + `GET /operand/manifests` | 이 레포 소유. control-plane은 이 선언을 fetch해 SSA apply만 |
+| **prometheus 연결** | `server.js` `/metrics`(실 신호) + `servicemonitor.yaml` | kps가 스크레이프 |
+| **메트릭 차트** | `ui-shell` 스파크라인(순수 SVG) + `/api/metrics/range`(kps 프록시) | 30분 시계열 |
+| **도메인·설정 편집** | `ui-shell` 설정 폼 → FM/identity `parameters.samba` merge-patch | 저장은 foundation 검증 write-path 재사용(최소권한 — plugin SA에 impersonate 미부여). 폼·스키마·operand 렌더는 plugin 소유 |
+| 관리 UI / CLI(os ad) / 매뉴얼 | 앞서 구현 | 이 레포 |
+
+**배포 아티팩트**(kubectl apply): `rbac.yaml` · `servicemonitor.yaml` · `uipluginpackage.yaml`.
+operand는 control-plane이 `GET /operand/manifests`로 받아 apply(라벨 스탬프·회수 유지) — engines.samba 설치옵션이 게이트.

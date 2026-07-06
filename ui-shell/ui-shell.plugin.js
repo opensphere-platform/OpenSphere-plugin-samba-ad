@@ -11,6 +11,18 @@
 const TAG = 'osp-samba-ad';
 let API_BASE = '';
 
+// 설정 저장 = FM/identity.spec.parameters.samba(foundation 도메인 자원) → foundation host의 검증된 write-path
+// (server.js가 x-os-id-token 검증+임퍼소네이션) 재사용. plugin은 폼·스키마·operand 렌더를 소유하되,
+// 도메인 자원 write는 최소권한 원칙상 foundation 경로로(플러그인 SA에 impersonate 권한 미부여).
+function foundationApiBase() { return API_BASE.replace(/\/plugins\/samba-ad$/, '/plugins/foundation'); }
+function osIdToken() {
+  try {
+    const w = window.__OS_AUTH__;
+    const t = typeof w?.token === 'function' ? w.token() : w?.token;
+    return t || '';
+  } catch { return ''; }
+}
+
 function esc(v) {
   return String(v ?? '—').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -21,25 +33,106 @@ function pill(ok, warnWhenFalse) {
   return ok ? 'label-success' : (warnWhenFalse ? 'label-warning' : 'label-danger');
 }
 
+// 순수 SVG 스파크라인(차트 라이브러리 무의존, light DOM). points=[[ts,"val"],…].
+function sparkline(points, w = 280, h = 44, color = '#4c6fff') {
+  if (!points || !points.length) return '<span class="os-sub">데이터 없음</span>';
+  const vals = points.map((p) => Number(p[1]));
+  const min = Math.min(...vals), max = Math.max(...vals), range = (max - min) || 1;
+  const step = w / ((points.length - 1) || 1);
+  const y = (v) => (h - 2 - ((v - min) / range) * (h - 4)).toFixed(1);
+  const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${y(Number(p[1]))}`).join(' ');
+  const last = vals[vals.length - 1];
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="display:block">
+    <path d="${d}" fill="none" stroke="${color}" stroke-width="1.5"/>
+    <circle cx="${((points.length - 1) * step).toFixed(1)}" cy="${y(last)}" r="2.5" fill="${color}"/>
+  </svg>`;
+}
+
 class SambaAdElement extends HTMLElement {
   connectedCallback() {
     this.innerHTML = '<p class="os-sub">Samba-AD 불러오는 중… <span class="spinner spinner-inline"></span></p>';
-    this._load();
-    this._timer = setInterval(() => this._load(), 15000);
+    this._load().then(() => this._loadCharts());
+    this._timer = setInterval(() => this._load().then(() => this._loadCharts()), 15000);
   }
   disconnectedCallback() { if (this._timer) { clearInterval(this._timer); this._timer = null; } }
+
+  // kube-prometheus-stack 시계열 → 스파크라인(자기 /api/metrics/range 프록시 경유).
+  async _loadCharts() {
+    const host = this.querySelector('#sc-metrics');
+    if (!host) return;
+    const series = [
+      { q: 'samba_ad_up{plugin="samba-ad"}', label: 'DC up (1/0)', color: '#2e8b57' },
+      { q: 'samba_ad_ldap_reachable{plugin="samba-ad"}', label: 'LDAP :389 reachable', color: '#4c6fff' },
+      { q: 'samba_ad_replicas_ready{plugin="samba-ad"}', label: 'Replicas ready', color: '#8b5cf6' },
+      { q: 'samba_ad_restarts_total{plugin="samba-ad"}', label: 'Restarts', color: '#e11d48' },
+    ];
+    try {
+      const results = await Promise.all(series.map((s) =>
+        fetch(`${API_BASE}/api/metrics/range?q=${encodeURIComponent(s.q)}&minutes=30`, { cache: 'no-store' })
+          .then((r) => r.ok ? r.json() : null).catch(() => null)));
+      const cards = results.map((res, i) => {
+        const s = series[i];
+        const pts = res?.data?.result?.[0]?.values;
+        const cur = pts && pts.length ? pts[pts.length - 1][1] : '—';
+        return `<div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><div class="card"><div class="card-block">
+          <div class="os-sub">${esc(s.label)}</div>
+          <div style="font-size:1.4rem;font-weight:600">${esc(cur)}</div>
+          ${sparkline(pts, 280, 44, s.color)}
+          <div class="os-sub">최근 30분</div>
+        </div></div></div>`;
+      }).join('');
+      const anyData = results.some((r) => r?.data?.result?.[0]?.values?.length);
+      host.innerHTML = `<h3>메트릭 <span class="os-sub">kube-prometheus-stack · 30분</span></h3>
+        ${anyData ? `<div class="clr-row">${cards}</div>`
+          : '<p class="os-sub">아직 시계열이 없습니다 — ServiceMonitor 스크레이프 누적을 기다리는 중이거나 Prometheus 연결을 확인하세요.</p>'}`;
+    } catch (e) {
+      host.innerHTML = `<h3>메트릭</h3><p class="os-sub">차트 조회 실패: ${esc(e)}</p>`;
+    }
+  }
 
   async _load() {
     try {
       const res = await fetch(`${API_BASE}/api/samba`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`samba: HTTP ${res.status}`);
       this.render(await res.json());
+      const btn = this.querySelector('#sc-cfg-save');
+      if (btn) btn.onclick = () => this._saveConfig();
     } catch (e) {
       this.innerHTML = `
         <div class="alert alert-danger"><div class="alert-items">
           <div class="alert-item static"><span class="alert-text">Samba-AD 상태 조회 실패: ${esc(e)}</span></div>
         </div></div>`;
     }
+  }
+
+  // 설정 저장(도메인/replicas/storageClass/dnsForwarder) → FM/identity merge-patch(foundation 검증 경로).
+  async _saveConfig() {
+    const status = this.querySelector('#sc-cfg-status');
+    const idt = osIdToken();
+    if (!idt) { if (status) status.textContent = '로그인 토큰 없음 — 저장 불가(콘솔 재로그인 필요).'; return; }
+    const val = (id) => (this.querySelector(id)?.value ?? '').trim();
+    const replicas = parseInt(val('#sc-cfg-replicas'), 10);
+    const body = { spec: { parameters: { samba: {
+      domain: val('#sc-cfg-domain') || 'OPENSPHERE.LOCAL',
+      replicas: Number.isInteger(replicas) ? replicas : 1,
+      storageClass: val('#sc-cfg-sc') || 'standard',
+      dnsForwarder: val('#sc-cfg-dns') || '8.8.8.8',
+    } } } };
+    if (status) status.textContent = '저장 중…';
+    try {
+      const res = await fetch(`${foundationApiBase()}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/merge-patch+json', 'x-os-id-token': idt },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        if (status) status.textContent = `저장 실패 HTTP ${res.status}${res.status === 403 ? ' (권한 없음 — foundation-models-manage)' : ''}: ${t.slice(0, 120)}`;
+        return;
+      }
+      if (status) status.textContent = '저장됨 — control-plane이 재조정하며 operand를 재렌더합니다(도메인/replicas 변경 시 pod 재기동).';
+      setTimeout(() => this._load().then(() => this._loadCharts()), 2000);
+    } catch (e) { if (status) status.textContent = `저장 실패: ${esc(e)}`; }
   }
 
   kv(pairs) { return pairs.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join(''); }
@@ -107,6 +200,17 @@ class SambaAdElement extends HTMLElement {
           ])}</tbody></table>
           <p class="os-sub">Keycloak(identity.iam.workspace)이 이 디렉터리를 federation해 사원 로그인을 제공.</p>`)}
       </div>
+      <h3>도메인 · 설정 <span class="os-sub">FoundationModel/identity · parameters.samba (선언형 write-path)</span></h3>
+      <div class="card"><div class="card-block"><div class="clr-row">
+        <div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><label class="os-sub">도메인(realm)<input id="sc-cfg-domain" class="clr-input" style="width:100%" value="${esc((d.config || {}).domain)}"></label></div>
+        <div class="clr-col-12 clr-col-md-6 clr-col-lg-2"><label class="os-sub">replicas<input id="sc-cfg-replicas" class="clr-input" type="number" min="1" style="width:100%" value="${esc((d.config || {}).replicas)}"></label></div>
+        <div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><label class="os-sub">StorageClass<input id="sc-cfg-sc" class="clr-input" style="width:100%" value="${esc((d.config || {}).storageClass)}"></label></div>
+        <div class="clr-col-12 clr-col-md-6 clr-col-lg-2"><label class="os-sub">DNS forwarder<input id="sc-cfg-dns" class="clr-input" style="width:100%" value="${esc((d.config || {}).dnsForwarder)}"></label></div>
+        <div class="clr-col-12 clr-col-lg-2" style="display:flex;align-items:flex-end"><button id="sc-cfg-save" class="btn btn-primary btn-sm">적용</button></div>
+      </div><p id="sc-cfg-status" class="os-sub"></p>
+      <p class="os-sub">⚠️ 도메인/replicas 변경은 control-plane 재조정 시 operand 재렌더 → pod 재기동을 유발합니다(PVC=SAM DB는 보존). 사용자·그룹은 samba-tool.</p>
+      </div></div>
+      <div id="sc-metrics"><h3>메트릭 <span class="os-sub">kube-prometheus-stack</span></h3><p class="os-sub">차트 로딩…</p></div>
       <h3>운영 이벤트 <span class="os-sub">K8s events</span></h3>
       ${eventRows ? `<table class="table"><thead><tr><th>유형</th><th>사유</th><th>메시지</th><th>시각</th></tr></thead><tbody>${eventRows}</tbody></table>`
         : '<p class="os-sub">최근 이벤트 없음.</p>'}
