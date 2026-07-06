@@ -16,13 +16,13 @@ spec:
   serviceAccountName: opensphere-plugin-samba-ad   # rbac.yaml — 전용 SA 최소권한(읽기)
   image:
     repository: ghcr.io/opensphere-platform/plugin-samba-ad
-    digest: sha256:7e3eb020d00c33629e82eb66ccc20603487ffed2844842a87e654502d9393263  # bk1 — 백업 override
+    digest: sha256:8b6a5ff5c8e34e8466af1bbf22fee075af29429d9558dab643c85d17621ee437  # bk2 — 세션 만료 처리
   nav:
     band: "운영 Operate"
     label: "Samba-AD"
   manifest:
     path: /plugins/ui-shell.manifest.json
-    sha256: "9afe905d85c550bc7822bbe04d78d0bef97da7619b41aa9724403065ab040c5a"
+    sha256: "0e64ca25cf038cc662ffb868363d86831f68f031cf33e5e0ce509c603fa762db"
     signaturePath: /plugins/ui-shell.manifest.json.sig
   trust:
     keyId: opensphere-plugins-v2

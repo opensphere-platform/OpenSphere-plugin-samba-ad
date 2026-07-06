@@ -23,6 +23,26 @@ function osIdToken() {
   } catch { return ''; }
 }
 
+// ── 콘솔 세션(15분 id_token, 자동 갱신 수단 없음 — __OS_AUTH__는 user/token만 노출) 만료 처리 ──
+// 셸이 refresh/login API를 주지 않으므로 복구 = 페이지 새로고침(SSO 재발급). 쓰기 전/후로 만료를 감지해
+// 암호 같은 401 대신 명확한 재로그인 안내를 준다. [[console-15min-token-expiry]]
+function tokenExpired() {
+  const t = osIdToken();
+  if (!t) return true;
+  try { const p = JSON.parse(atob(t.split('.')[1])); return (p.exp - Math.floor(Date.now() / 1000)) <= 5; }
+  catch { return false; }  // 디코드 불가면 서버 검증에 위임(선차단 안 함)
+}
+function isAuthFail(status, body) {
+  return status === 401 || /token expired|token missing|unauthorized/i.test(String(body || ''));
+}
+// status 엘리먼트에 세션 만료 안내 + 새로고침 링크(inline onclick은 CSP 차단 → addEventListener). 값 esc 불요(고정 문자열).
+function sessionExpiredMsg(el) {
+  if (!el) return;
+  el.innerHTML = '세션이 만료되었습니다 (콘솔 로그인 15분 · 자동 갱신 없음). <a href="#" data-osp-reload>새로고침</a> 후 값을 다시 입력해 저장하세요.';
+  const a = el.querySelector('[data-osp-reload]');
+  if (a) a.addEventListener('click', (e) => { e.preventDefault(); location.reload(); });
+}
+
 function esc(v) {
   return String(v ?? '—').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -178,8 +198,8 @@ class SambaAdElement extends HTMLElement {
   // 백업 활성화·저장 — (전용이면 Secret+BSL 생성) → Schedule 등록/갱신 → FM parameters.samba.backup 기록.
   async _saveBackup() {
     const status = this.querySelector('#sc-bk-status');
+    if (tokenExpired()) { sessionExpiredMsg(status); return; }
     const idt = osIdToken();
-    if (!idt) { if (status) status.textContent = '로그인 토큰 없음 — 저장 불가(콘솔 재로그인 필요).'; return; }
     const val = (id) => (this.querySelector(id)?.value ?? '').trim();
     const mode = val('#sc-bk-mode') === 'dedicated' ? 'dedicated' : 'shared';
     const schedule = val('#sc-bk-cron') || '0 2 * * *';
@@ -196,16 +216,16 @@ class SambaAdElement extends HTMLElement {
         const cloud = `[default]\naws_access_key_id=${ak}\naws_secret_access_key=${sk}\n`;
         const secret = { apiVersion: 'v1', kind: 'Secret', metadata: { name: 'samba-ad-backup-creds', namespace: 'velero', labels: { 'opensphere.io/plugin': 'samba-ad' } }, type: 'Opaque', data: { cloud: btoa(cloud) } };
         const sRes = await this._ensureCR(base, idt, 'api/v1/namespaces/velero', 'secrets', 'samba-ad-backup-creds', secret);
-        if (!sRes.ok) { if (status) status.textContent = `전용 자격증명 저장 실패 HTTP ${sRes.status}: ${(sRes.body || '').slice(0, 120)}`; return; }
+        if (!sRes.ok) { if (isAuthFail(sRes.status, sRes.body)) { sessionExpiredMsg(status); return; } if (status) status.textContent = `전용 자격증명 저장 실패 HTTP ${sRes.status}: ${(sRes.body || '').slice(0, 120)}`; return; }
         const bsl = { apiVersion: 'velero.io/v1', kind: 'BackupStorageLocation', metadata: { name: 'samba-ad', namespace: 'velero', labels: { 'opensphere.io/plugin': 'samba-ad' } },
           spec: { provider: 'aws', objectStorage: { bucket }, credential: { name: 'samba-ad-backup-creds', key: 'cloud' }, config: { region, s3Url: ep, s3ForcePathStyle: 'true' } } };
         const bRes = await this._ensureCR(base, idt, 'apis/velero.io/v1/namespaces/velero', 'backupstoragelocations', 'samba-ad', bsl);
-        if (!bRes.ok) { if (status) status.textContent = `전용 저장위치(BSL) 생성 실패 HTTP ${bRes.status}: ${(bRes.body || '').slice(0, 120)}`; return; }
+        if (!bRes.ok) { if (isAuthFail(bRes.status, bRes.body)) { sessionExpiredMsg(status); return; } if (status) status.textContent = `전용 저장위치(BSL) 생성 실패 HTTP ${bRes.status}: ${(bRes.body || '').slice(0, 120)}`; return; }
       }
       const sched = { apiVersion: 'velero.io/v1', kind: 'Schedule', metadata: { name: 'samba-ad', namespace: 'velero', labels: { 'opensphere.io/plugin': 'samba-ad' } },
         spec: { schedule, template: { includedNamespaces: ['opensphere-foundation'], labelSelector: { matchLabels: { app: 'foundation-identity-samba' } }, defaultVolumesToFsBackup: true, storageLocation: bslName, ttl: '720h0m0s' } } };
       const scRes = await this._ensureCR(base, idt, 'apis/velero.io/v1/namespaces/velero', 'schedules', 'samba-ad', sched);
-      if (!scRes.ok) { if (status) status.textContent = `일정 등록 실패 HTTP ${scRes.status}${scRes.status === 403 ? ' (권한 없음 — velero 네임스페이스 쓰기 필요)' : ''}: ${(scRes.body || '').slice(0, 120)}`; return; }
+      if (!scRes.ok) { if (isAuthFail(scRes.status, scRes.body)) { sessionExpiredMsg(status); return; } if (status) status.textContent = `일정 등록 실패 HTTP ${scRes.status}${scRes.status === 403 ? ' (권한 없음 — velero 네임스페이스 쓰기 필요)' : ''}: ${(scRes.body || '').slice(0, 120)}`; return; }
       // FM에 백업 설정 기록(표시·정본).
       const fmBody = { spec: { parameters: { samba: { backup: { enabled: true, mode, schedule, dedicated } } } } };
       await fetch(`${base}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
@@ -219,8 +239,8 @@ class SambaAdElement extends HTMLElement {
   // 지금 백업 — 일회성 Backup CR 생성(현재 모드의 BSL 사용). node-agent 파일시스템 백업으로 PVC 담김.
   async _backupNow() {
     const status = this.querySelector('#sc-bk-status');
+    if (tokenExpired()) { sessionExpiredMsg(status); return; }
     const idt = osIdToken();
-    if (!idt) { if (status) status.textContent = '로그인 토큰 없음 — 실행 불가.'; return; }
     const mode = (this.querySelector('#sc-bk-mode')?.value === 'dedicated') ? 'dedicated' : 'shared';
     const bslName = mode === 'dedicated' ? 'samba-ad' : 'default';
     const base = foundationApiBase();
@@ -232,7 +252,7 @@ class SambaAdElement extends HTMLElement {
       const r = await fetch(`${base}/api/k8s/apis/velero.io/v1/namespaces/velero/backups`, {
         method: 'POST', headers: { 'content-type': 'application/json', 'x-os-id-token': idt }, body: JSON.stringify(bk),
       });
-      if (!r.ok) { const t = await r.text().catch(() => ''); if (status) status.textContent = `백업 요청 실패 HTTP ${r.status}: ${t.slice(0, 120)}`; return; }
+      if (!r.ok) { const t = await r.text().catch(() => ''); if (isAuthFail(r.status, t)) { sessionExpiredMsg(status); return; } if (status) status.textContent = `백업 요청 실패 HTTP ${r.status}: ${t.slice(0, 120)}`; return; }
       if (status) status.textContent = `백업 요청됨(${name}) — 진행 상태는 아래 표에서 갱신됩니다.`;
       setTimeout(() => this._loadBackup(), 1500);
     } catch (e) { if (status) status.textContent = `백업 요청 실패: ${esc(e)}`; }
@@ -262,8 +282,8 @@ class SambaAdElement extends HTMLElement {
   // 설정 저장(도메인/replicas/storageClass/dnsForwarder) → FM/identity merge-patch(foundation 검증 경로).
   async _saveConfig() {
     const status = this.querySelector('#sc-cfg-status');
+    if (tokenExpired()) { sessionExpiredMsg(status); return; }
     const idt = osIdToken();
-    if (!idt) { if (status) status.textContent = '로그인 토큰 없음 — 저장 불가(콘솔 재로그인 필요).'; return; }
     const val = (id) => (this.querySelector(id)?.value ?? '').trim();
     const replicas = parseInt(val('#sc-cfg-replicas'), 10);
     const body = { spec: { parameters: { samba: {
@@ -281,6 +301,7 @@ class SambaAdElement extends HTMLElement {
       });
       if (!res.ok) {
         const t = await res.text().catch(() => '');
+        if (isAuthFail(res.status, t)) { sessionExpiredMsg(status); return; }
         if (status) status.textContent = `저장 실패 HTTP ${res.status}${res.status === 403 ? ' (권한 없음 — foundation-models-manage)' : ''}: ${t.slice(0, 120)}`;
         return;
       }

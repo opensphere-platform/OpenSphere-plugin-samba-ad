@@ -7,7 +7,7 @@
   "title": "Samba-AD",
   "description": "workspace/사원 디렉터리(Samba AD DC) 관리 plugin — Foundation(host) 안층 마운트, 콘솔 DUPA 신뢰체인 적재.",
   "entry": "ui-shell.plugin.js",
-  "entrySha256": "e5d3d750d446c27518de417b40eb94e7d1ef6fc88a4c2deb002f81bfe995d20e",
+  "entrySha256": "134351c2cfa44858ab74610d3c42039c9028a1c2178a8b107333d36f3adbe291",
   "shellCompat": ">=0.2.0 <0.9.0",
   "permissions": [
     "page:register",
