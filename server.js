@@ -151,6 +151,20 @@ async function sambaPayload() {
     storageClass: sp.storageClass || SAMBA_DEFAULTS.storageClass,
     dnsForwarder: sp.dnsForwarder || SAMBA_DEFAULTS.dnsForwarder,
   };
+  // 백업 설정 정본 = FM/identity.spec.parameters.samba.backup. mode=shared(공용 기본 BSL) | dedicated(전용 BSL).
+  // 실 Schedule/Backup(velero.io, ns velero)은 UI가 foundation 프록시(사용자 임퍼소네이션)로 읽고 쓴다 —
+  // plugin SA에 velero 권한을 주지 않는 최소권한(velero 페이지 install()과 동형 write-path).
+  const bk = sp.backup || {};
+  const backup = {
+    enabled: !!bk.enabled,
+    mode: bk.mode === 'dedicated' ? 'dedicated' : 'shared',
+    schedule: bk.schedule || '0 2 * * *',
+    ttlHours: Number.isInteger(bk.ttlHours) ? bk.ttlHours : 720,
+    dedicated: bk.dedicated ? { endpoint: bk.dedicated.endpoint || '', bucket: bk.dedicated.bucket || '', region: bk.dedicated.region || '' } : null,
+    scheduleName: 'samba-ad',   // velero.io Schedule 이름(고정) — UI가 이 이름으로 조회/갱신
+    bslName: bk.mode === 'dedicated' ? 'samba-ad' : 'default',
+    pvc: SAMBA_DATA_PVC, podSelector: `app=${SAMBA}`,
+  };
   const evs = (events.items || [])
     .map((e) => ({ type: e.type, reason: e.reason, message: e.message, time: e.lastTimestamp || e.eventTime || '' }))
     .sort((a, b) => String(b.time).localeCompare(String(a.time)));
@@ -158,6 +172,7 @@ async function sambaPayload() {
     meta: { service: 'opensphere-plugin-samba-ad', version: VERSION, servedBy: process.env.HOSTNAME || 'unknown', time: new Date().toISOString(), ns: FND_NS },
     model,
     config,
+    backup,
     storageClasses,
     workload: workloadView(dep, pods),
     keycloak: kcDep.__status ? { found: false } : { found: true, ready: (kcDep.status?.readyReplicas ?? 0) >= 1, name: KEYCLOAK },
