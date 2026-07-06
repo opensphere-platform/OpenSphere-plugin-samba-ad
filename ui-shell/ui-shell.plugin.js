@@ -42,7 +42,7 @@ function sparkline(points, w = 280, h = 44, color = '#4c6fff') {
   const y = (v) => (h - 2 - ((v - min) / range) * (h - 4)).toFixed(1);
   const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${y(Number(p[1]))}`).join(' ');
   const last = vals[vals.length - 1];
-  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="display:block">
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
     <path d="${d}" fill="none" stroke="${color}" stroke-width="1.5"/>
     <circle cx="${((points.length - 1) * step).toFixed(1)}" cy="${y(last)}" r="2.5" fill="${color}"/>
   </svg>`;
@@ -76,17 +76,17 @@ class SambaAdElement extends HTMLElement {
         const cur = pts && pts.length ? pts[pts.length - 1][1] : '—';
         return `<div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><div class="card"><div class="card-block">
           <div class="os-sub">${esc(s.label)}</div>
-          <div style="font-size:1.4rem;font-weight:600">${esc(cur)}</div>
+          <p class="p2"><strong>${esc(cur)}</strong></p>
           ${sparkline(pts, 280, 44, s.color)}
           <div class="os-sub">최근 30분</div>
         </div></div></div>`;
       }).join('');
       const anyData = results.some((r) => r?.data?.result?.[0]?.values?.length);
-      host.innerHTML = `<h3>메트릭 <span class="os-sub">kube-prometheus-stack · 30분</span></h3>
+      host.innerHTML = `<div class="os-sech">메트릭 <span class="os-sub">kube-prometheus-stack · 30분</span></div>
         ${anyData ? `<div class="clr-row">${cards}</div>`
           : '<p class="os-sub">아직 시계열이 없습니다 — ServiceMonitor 스크레이프 누적을 기다리는 중이거나 Prometheus 연결을 확인하세요.</p>'}`;
     } catch (e) {
-      host.innerHTML = `<h3>메트릭</h3><p class="os-sub">차트 조회 실패: ${esc(e)}</p>`;
+      host.innerHTML = `<div class="os-sech">메트릭</div><p class="os-sub">차트 조회 실패: ${esc(e)}</p>`;
     }
   }
 
@@ -145,7 +145,7 @@ class SambaAdElement extends HTMLElement {
       const label = n + (sc && sc.isDefault ? ' (default)' : '');
       return `<option value="${esc(n)}"${n === cur ? ' selected' : ''}>${esc(label)}</option>`;
     }).join('');
-    return `<select id="sc-cfg-sc" class="clr-select" style="width:100%">${opts || `<option value="${esc(cur)}" selected>${esc(cur || '—')}</option>`}</select>`;
+    return `<select id="sc-cfg-sc" class="os-filter">${opts || `<option value="${esc(cur)}" selected>${esc(cur || '—')}</option>`}</select>`;
   }
 
   kv(pairs) { return pairs.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join(''); }
@@ -181,7 +181,7 @@ class SambaAdElement extends HTMLElement {
       <td class="os-mono">${esc(e.reason)}</td><td>${esc(e.message)}</td><td>${esc(e.time)}</td></tr>`).join('');
 
     this.innerHTML = `
-      <h1>Samba-AD <span class="badge badge-info">plugin</span> <span class="label ${phasePill}">${esc(phase)}</span></h1>
+      <div class="os-title-row"><h2 class="os-h2">Samba-AD <span class="label label-info">plugin</span> <span class="label ${phasePill}">${esc(phase)}</span></h2></div>
       <p class="os-sub">workspace/사원 디렉터리 · Samba Active Directory DC · realm ${esc(realm)} · ns ${esc(d.meta?.ns)}
         · <strong>독립 서명 plugin(OpenSphere-plugin-samba-ad) — 기능 컨테이너 ${esc(d.meta?.servedBy)}가 서빙, Foundation(host)이 안층 마운트</strong></p>
       ${notDeployed}
@@ -213,18 +213,18 @@ class SambaAdElement extends HTMLElement {
           ])}</tbody></table>
           <p class="os-sub">Keycloak(identity.iam.workspace)이 이 디렉터리를 federation해 사원 로그인을 제공.</p>`)}
       </div>
-      <h3>도메인 · 설정 <span class="os-sub">FoundationModel/identity · parameters.samba (선언형 write-path)</span></h3>
+      <div class="os-sech">도메인 · 설정 <span class="os-sub">FoundationModel/identity · parameters.samba (선언형 write-path)</span></div>
       <div class="card"><div class="card-block"><div class="clr-row">
-        <div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><label class="os-sub">도메인(realm)<input id="sc-cfg-domain" class="clr-input" style="width:100%" value="${esc((d.config || {}).domain)}"></label></div>
-        <div class="clr-col-12 clr-col-md-6 clr-col-lg-2"><label class="os-sub">replicas<input id="sc-cfg-replicas" class="clr-input" type="number" min="1" style="width:100%" value="${esc((d.config || {}).replicas)}"></label></div>
+        <div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><label class="os-sub">도메인(realm)<input id="sc-cfg-domain" class="os-filter" value="${esc((d.config || {}).domain)}"></label></div>
+        <div class="clr-col-12 clr-col-md-6 clr-col-lg-2"><label class="os-sub">replicas<input id="sc-cfg-replicas" class="os-filter" type="number" min="1" value="${esc((d.config || {}).replicas)}"></label></div>
         <div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><label class="os-sub">StorageClass${this._scSelect(d)}</label></div>
-        <div class="clr-col-12 clr-col-md-6 clr-col-lg-2"><label class="os-sub">DNS forwarder<input id="sc-cfg-dns" class="clr-input" style="width:100%" value="${esc((d.config || {}).dnsForwarder)}"></label></div>
-        <div class="clr-col-12 clr-col-lg-2" style="display:flex;align-items:flex-end"><button id="sc-cfg-save" class="btn btn-primary btn-sm">적용</button></div>
+        <div class="clr-col-12 clr-col-md-6 clr-col-lg-2"><label class="os-sub">DNS forwarder<input id="sc-cfg-dns" class="os-filter" value="${esc((d.config || {}).dnsForwarder)}"></label></div>
+        <div class="clr-col-12 clr-col-lg-2 os-actions"><button id="sc-cfg-save" class="btn btn-primary btn-sm">적용</button></div>
       </div><p id="sc-cfg-status" class="os-sub"></p>
       <p class="os-sub">⚠️ 도메인/replicas 변경은 control-plane 재조정 시 operand 재렌더 → pod 재기동을 유발합니다(PVC=SAM DB는 보존). 사용자·그룹은 samba-tool.</p>
       </div></div>
-      <div id="sc-metrics"><h3>메트릭 <span class="os-sub">kube-prometheus-stack</span></h3><p class="os-sub">차트 로딩…</p></div>
-      <h3>운영 이벤트 <span class="os-sub">K8s events</span></h3>
+      <div id="sc-metrics"><div class="os-sech">메트릭 <span class="os-sub">kube-prometheus-stack</span></div><p class="os-sub">차트 로딩…</p></div>
+      <div class="os-sech">운영 이벤트 <span class="os-sub">K8s events</span></div>
       ${eventRows ? `<table class="table"><thead><tr><th>유형</th><th>사유</th><th>메시지</th><th>시각</th></tr></thead><tbody>${eventRows}</tbody></table>`
         : '<p class="os-sub">최근 이벤트 없음.</p>'}
       <div class="alert alert-info"><div class="alert-items">
