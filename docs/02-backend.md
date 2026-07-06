@@ -62,7 +62,8 @@ GET /operand/manifests
 - `buildOperand(cfg)`가 Samba DC operand(6포트 SVC + privileged Deployment + NetworkPolicy + 3Gi PVC)를 **JSON 오브젝트 배열**로 생성. `cfg`는 `FM.spec.parameters.samba`(도메인/replicas/StorageClass/DNS forwarder)에서 렌더.
 - **control-plane(foundation)이 이 선언을 fetch → 라벨 스탬프(owner·engine) → SSA apply**("내민 선언을 apply만"). plugin은 선언을 **소유**하고, host는 **적용**만 한다.
 - **PVC는 회수 대상에서 제외**(SAM DB 보존) — Disable/재조정 시에도 데이터가 남는다.
-- ⚠️ dev 예외: operand는 `privileged: true` + dev 기본 도메인 비밀번호(`SAMBA_DEFAULTS.domainPass`). 프로덕션은 Secret 주입·비-privileged로 대체할 것.
+- 🔐 비밀번호(감사 Critical 시정, bk3): `DOMAINPASS`는 평문이 아니라 **Foundation 소유 Secret**(`foundation-identity-samba-creds`)을 `secretKeyRef`로만 참조한다. `readSambaConfig`/`/operand/manifests`는 비밀번호를 **반환하지 않는다**. 하드코딩·평문 폐지. 상세: [08-audit-response](08-audit-response-2026-07-06.md).
+- ⚠️ dev 예외(잔존): operand는 `privileged: true` + `INSECURELDAP`/`NOCOMPLEXITY`. **프로덕션 프로파일**(LDAPS·비-privileged)은 Foundation 과제("다음"). 이 예외는 operand 고유이며 plugin 패턴 규범이 아니다.
 
 ## 2.5 관측 표면 — /metrics는 위조 0
 

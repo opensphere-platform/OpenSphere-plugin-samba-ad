@@ -16,19 +16,19 @@ spec:
   serviceAccountName: opensphere-plugin-samba-ad   # rbac.yaml — 전용 SA 최소권한(읽기)
   image:
     repository: ghcr.io/opensphere-platform/plugin-samba-ad
-    digest: sha256:8b6a5ff5c8e34e8466af1bbf22fee075af29429d9558dab643c85d17621ee437  # bk2 — 세션 만료 처리
+    digest: sha256:ed7a09287c70caea6183047df1377299d587ad3992848c963d8c50a17d951bf8  # bk3 — 감사 시정(비밀번호 Secret화·하드닝)
   nav:
     band: "운영 Operate"
     label: "Samba-AD"
   manifest:
     path: /plugins/ui-shell.manifest.json
-    sha256: "0e64ca25cf038cc662ffb868363d86831f68f031cf33e5e0ce509c603fa762db"
+    sha256: "ec418ce6905158a167280ace16c5af8800d534cfb9ecb6223091ab6ac1209ec2"
     signaturePath: /plugins/ui-shell.manifest.json.sig
   trust:
     keyId: opensphere-plugins-v2
   shellCompat: ">=0.2.0 <0.9.0"
+  # 감사 Medium 시정: registerPage 미호출(sub-hosted)이므로 page:register 제거 — 미사용 권한 회수(최소권한).
   permissions:
-    - page:register
     - api:proxy
     - manual:contribute
   api:

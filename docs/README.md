@@ -27,7 +27,9 @@
 ### 단서 (샘플로 쓸 때 반드시 이해할 것)
 
 1. **이건 host-mounted 변종의 샘플이다.** `registerPage`를 **의도적으로 호출하지 않고**(mainShell 1단 비노출) Foundation(host)이 안층에서 마운트한다. mainShell에 직접 나타나는 standalone plugin을 만들 거라면 마운트 계약이 다르다(§01 참조). 두 패턴의 **공통부**(신뢰체인·서명·SA·통합축)는 그대로 재사용 가능하다.
-2. **operand(Samba DC)는 dev 예외를 포함한다.** `privileged: true` 컨테이너 + 코드 내 dev 기본 도메인 비밀번호(`SAMBA_DEFAULTS.domainPass`). **패턴은 프로덕션급이지만 samba operand 자체는 학습용 dev 구성**이다 — 프로덕션은 Secret 주입·비-privileged·외부화가 필요하다.
+2. **operand(Samba DC)는 dev 예외를 포함한다.** `privileged: true` 컨테이너 + `INSECURELDAP`/`NOCOMPLEXITY`. **패턴은 프로덕션급이지만 samba operand 자체는 학습용 dev 구성**이다 — 프로덕션 프로파일(LDAPS·비-privileged)은 Foundation 과제. (도메인 비밀번호는 bk3에서 **Foundation 소유 Secret + secretKeyRef**로 시정됨 — 하드코딩·평문 폐지. [08-audit-response](08-audit-response-2026-07-06.md) 참조.)
+
+> **감사 대응**: [06-technical-audit](06-technical-audit-2026-07-06.md) + [07-crossplane-writepath-notice](07-crossplane-writepath-notice-2026-07-06.md)의 즉시 항목은 **bk3에서 전부 시정·라이브 검증**. 처분·목표 모델(Claim/Binding)·"다음" 계획 → [08-audit-response](08-audit-response-2026-07-06.md). 자기검증: `node verify.mjs`(11/11).
 
 ### 아직 아닌 것 (한계)
 

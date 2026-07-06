@@ -22,16 +22,21 @@ const KEYCLOAK = 'foundation-identity-keycloak';
 // control-plane은 GET /operand/manifests로 이 선언을 받아 SSA apply만 한다("내민 선언을 apply").
 const SAMBA_IMAGE = process.env.SAMBA_IMAGE || 'ghcr.io/opensphere-platform/mirror/samba-domain:20260706';
 const SAMBA_DATA_PVC = 'foundation-identity-samba-data';
+// ── 감사 Critical 시정(2026-07-06) — 도메인 부트스트랩 비밀번호를 소스/manifest/응답에 두지 않는다 ──
+// Foundation/Identity 소유 Secret(opensphere-foundation ns)에 보관하고, operand는 secretKeyRef로만 참조한다.
+// readSambaConfig/operand 응답은 비밀번호를 절대 반환하지 않는다(평문 유출 제거). 소스 하드코딩 폐지.
+const SAMBA_CREDS_SECRET = process.env.SAMBA_CREDS_SECRET || 'foundation-identity-samba-creds';
+const SAMBA_CREDS_KEY = 'domain-password';
 
-// 설정 정본 = FoundationModel/identity.spec.parameters.samba (없으면 dev 기본값).
+// 설정 정본 = FoundationModel/identity.spec.parameters.samba (없으면 dev 기본값 — 단, 비밀번호는 여기 없음).
 // 3단계 설정 페이지가 이 필드를 PATCH하면 control-plane 재조정 시 operand가 재렌더된다.
-const SAMBA_DEFAULTS = { domain: 'OPENSPHERE.LOCAL', domainPass: 'OpenSphere2026!', replicas: 1, storageClass: 'standard', dnsForwarder: '8.8.8.8' };
+const SAMBA_DEFAULTS = { domain: 'OPENSPHERE.LOCAL', replicas: 1, storageClass: 'standard', dnsForwarder: '8.8.8.8' };
 async function readSambaConfig() {
   const fm = await k8sGet('/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity');
   const p = (!fm.__status && fm.spec?.parameters?.samba) || {};
+  // 비밀번호(domainPass)는 의도적으로 제외 — operand는 Secret(secretKeyRef)에서 받는다.
   return {
     domain: p.domain || SAMBA_DEFAULTS.domain,
-    domainPass: p.domainPass || SAMBA_DEFAULTS.domainPass,
     replicas: Number.isInteger(p.replicas) ? p.replicas : SAMBA_DEFAULTS.replicas,
     storageClass: p.storageClass || SAMBA_DEFAULTS.storageClass,
     dnsForwarder: p.dnsForwarder || SAMBA_DEFAULTS.dnsForwarder,
@@ -62,7 +67,8 @@ function buildOperand(cfg) {
               securityContext: { privileged: true },
               env: [
                 { name: 'DOMAIN', value: cfg.domain },
-                { name: 'DOMAINPASS', value: cfg.domainPass },
+                // 비밀번호는 평문 value 금지 — Foundation/Identity 소유 Secret에서 참조(감사 Critical 시정).
+                { name: 'DOMAINPASS', valueFrom: { secretKeyRef: { name: SAMBA_CREDS_SECRET, key: SAMBA_CREDS_KEY } } },
                 { name: 'HOSTIP', valueFrom: { fieldRef: { fieldPath: 'status.podIP' } } },
                 { name: 'DNSFORWARDER', value: cfg.dnsForwarder },
                 { name: 'NOCOMPLEXITY', value: 'true' },
@@ -83,19 +89,38 @@ function buildOperand(cfg) {
             volumes: [{ name: 'data', persistentVolumeClaim: { claimName: SAMBA_DATA_PVC } }] } } } },
     { apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', metadata: meta(SAMBA),
       spec: { podSelector: { matchLabels: { app: SAMBA } }, policyTypes: ['Ingress'],
-        ingress: [{ ports: [
-          { protocol: 'TCP', port: 389 }, { protocol: 'TCP', port: 636 }, { protocol: 'TCP', port: 88 },
-          { protocol: 'TCP', port: 53 }, { protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 445 },
-        ] }] } },
+        // 감사 High 시정: from 없는 ingress는 전 출처 허용 → 알려진 소비자로 제한.
+        // Keycloak(federation) + foundation ns(도메인 멤버·control-plane)만 허용. 타 ns 소비자는 from에 명시 추가.
+        ingress: [{
+          from: [
+            { podSelector: { matchLabels: { app: KEYCLOAK } } },
+            { namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': FND_NS } } },
+          ],
+          ports: [
+            { protocol: 'TCP', port: 389 }, { protocol: 'TCP', port: 636 }, { protocol: 'TCP', port: 88 },
+            { protocol: 'TCP', port: 53 }, { protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 445 },
+          ],
+        }] } },
   ];
 }
 
 function saToken() { return fs.readFileSync(`${SA}/token`, 'utf8').trim(); }
 
+// 감사 Medium 시정: 의존성(k8s/prometheus/loki/controller)이 느리거나 불통일 때 응답이 무한 대기하지
+// 않도록 AbortController 기반 유한 타임아웃. 초과 시 abort→throw → 호출부가 __status/에러로 처리.
+async function fetchT(url, opts = {}, ms = 5000) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: ac.signal }); }
+  finally { clearTimeout(t); }
+}
+
 async function k8sGet(p) {
-  const res = await fetch(`${APISERVER}${p}`, { headers: { Authorization: `Bearer ${saToken()}` } });
-  if (!res.ok) return { __status: res.status };
-  return res.json();
+  try {
+    const res = await fetchT(`${APISERVER}${p}`, { headers: { Authorization: `Bearer ${saToken()}` } }, 5000);
+    if (!res.ok) return { __status: res.status };
+    return res.json();
+  } catch { return { __status: 504 }; }  // 타임아웃/네트워크 → gateway timeout으로 표기
 }
 
 function workloadView(dep, pods) {
@@ -238,20 +263,24 @@ const LOKI = process.env.LOKI_URL || 'http://loki.monitoring.svc:3100';
 async function lokiTail(minutes, limit) {
   const endNs = Date.now() * 1e6;
   const startNs = (Date.now() - Math.max(1, minutes) * 60000) * 1e6;
+  // LogQL은 고정 템플릿(사용자 쿼리 미수용) — samba pod 로그만. 감사 §8 권고 정합.
   const q = encodeURIComponent(`{namespace="${FND_NS}",app="${SAMBA}"}`);
   const u = `${LOKI}/loki/api/v1/query_range?query=${q}&start=${startNs}&end=${endNs}&limit=${limit}&direction=backward`;
-  const r = await fetch(u);
-  if (!r.ok) return { __status: r.status };
-  return r.json();
+  try { const r = await fetchT(u, {}, 6000); if (!r.ok) return { __status: r.status }; return r.json(); }
+  catch { return { __status: 504 }; }
+}
+// 감사 Medium 시정: /api/metrics/range의 q를 samba_ad_* 단일 메트릭(+선택 라벨매처)로만 제한.
+// 함수·조인·연산자·타 메트릭을 거부 → 임의 PromQL 프록시화 방지.
+function promAllowed(q) {
+  return /^\s*samba_ad_[a-z0-9_]+\s*(\{[^{}]*\})?\s*$/.test(String(q || ''));
 }
 async function promRange(query, minutes) {
   const end = Math.floor(Date.now() / 1000);
   const start = end - Math.max(1, minutes) * 60;
   const step = Math.max(15, Math.floor((end - start) / 120));
   const u = `${PROM}/api/v1/query_range?query=${encodeURIComponent(query)}&start=${start}&end=${end}&step=${step}`;
-  const r = await fetch(u);
-  if (!r.ok) return { __status: r.status };
-  return r.json();
+  try { const r = await fetchT(u, {}, 6000); if (!r.ok) return { __status: r.status }; return r.json(); }
+  catch { return { __status: 504 }; }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -264,6 +293,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/metrics/range') {
       const q = url.searchParams.get('q') || 'samba_ad_up{plugin="samba-ad"}';
+      if (!promAllowed(q)) { res.writeHead(400, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: '허용되지 않은 쿼리 — samba_ad_* 메트릭만 조회 가능(임의 PromQL 거부).' })); }
       const minutes = parseInt(url.searchParams.get('minutes') || '30', 10);
       const out = await promRange(q, minutes);
       res.writeHead(out.__status ? 502 : 200, { 'content-type': 'application/json' });
@@ -354,7 +384,7 @@ let _notifyWarned = false;
 async function publishNotify(ev) {
   if (!SHELL_TOKEN) { if (!_notifyWarned) { _notifyWarned = true; console.warn('[notify] SHELL_SERVICE_TOKEN 없음 — 이벤트 발행 생략'); } return; }
   try {
-    const res = await fetch(`${CONTROLLER}/api/admin/events`, {
+    const res = await fetchT(`${CONTROLLER}/api/admin/events`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-shell-token': SHELL_TOKEN, 'x-opensphere-source': 'samba-ad' },
       body: JSON.stringify({ source: 'samba-ad', ...ev }),
