@@ -10,6 +10,7 @@
 
 const TAG = 'osp-samba-ad';
 let API_BASE = '';
+const SAMBA_LOGO_URL = 'https://cdn.statically.io/gh/openplatform-labs/images@main/logos/samba-server.svg';
 
 // 설정 저장 = FM/identity.spec.parameters.samba(foundation 도메인 자원) → foundation host의 검증된 write-path
 // (server.js가 x-os-id-token 검증+임퍼소네이션) 재사용. plugin은 폼·스키마·operand 렌더를 소유하되,
@@ -53,6 +54,27 @@ function pill(ok, warnWhenFalse) {
   return ok ? 'label-success' : (warnWhenFalse ? 'label-warning' : 'label-danger');
 }
 
+function sambaLogo(size = 34) {
+  return `<img src="${SAMBA_LOGO_URL}" alt="Samba-AD" style="width:${size}px;height:${size}px;object-fit:contain;vertical-align:middle;margin-right:.5rem;">`;
+}
+
+function explainBlocker(c) {
+  if (c?.id === 'identity-claim-binding') {
+    return {
+      title: 'Samba-AD 사용권/연결 계약이 아직 준비되지 않았습니다.',
+      problem: 'Keycloak 같은 다른 모듈이 Samba-AD를 사용하려면 IdentityDirectoryClaim과 IdentityDirectoryBinding이라는 표준 계약이 먼저 있어야 합니다.',
+      impact: '이 계약이 없으면 어떤 모듈에게 LDAP 주소, bind 계정 Secret, 네트워크 허용 정책을 줄지 안전하게 관리할 수 없습니다.',
+      fix: 'Foundation에 IdentityDirectoryClaim/IdentityDirectoryBinding CRD와 reconciler를 설치한 뒤 다시 Preflight를 확인하세요. Crossplane 자체는 준비되어 있으므로 다음 작업은 Identity Claim/Binding 계약 등록입니다.',
+    };
+  }
+  return {
+    title: c?.label || '필수 조건 미충족',
+    problem: c?.message || '설치 전 필수 조건이 충족되지 않았습니다.',
+    impact: '이 상태에서는 Samba-AD operand를 안전하게 배포할 수 없습니다.',
+    fix: 'BLOCK 항목을 해결한 뒤 Preflight를 다시 실행하세요.',
+  };
+}
+
 // 순수 SVG 스파크라인(차트 라이브러리 무의존, light DOM). points=[[ts,"val"],…].
 function sparkline(points, w = 280, h = 44, color = '#4c6fff') {
   if (!points || !points.length) return '<span class="os-sub">데이터 없음</span>';
@@ -71,10 +93,16 @@ function sparkline(points, w = 280, h = 44, color = '#4c6fff') {
 class SambaAdElement extends HTMLElement {
   connectedCallback() {
     this.innerHTML = '<p class="os-sub">Samba-AD 불러오는 중… <span class="spinner spinner-inline"></span></p>';
-    this._load().then(() => { this._loadCharts(); this._loadLogs(); this._loadBackup(); });
-    this._timer = setInterval(() => this._load().then(() => { this._loadCharts(); this._loadLogs(); this._loadBackup(); }), 15000);
+    this._load().then(() => this._afterRenderLoads());
+    this._timer = setInterval(() => this._load().then(() => this._afterRenderLoads()), 15000);
   }
   disconnectedCallback() { if (this._timer) { clearInterval(this._timer); this._timer = null; } }
+
+  _afterRenderLoads() {
+    if (this.querySelector('#sc-metrics')) this._loadCharts();
+    if (this.querySelector('#sc-logs')) this._loadLogs();
+    if (this.querySelector('#sc-backup')) this._loadBackup();
+  }
 
   // Loki 로그 통합 — samba pod stdout tail(자기 /api/logs 프록시 경유). 셸 vl-log 콘솔 박스 재사용(velero 동일).
   async _loadLogs() {
@@ -101,37 +129,79 @@ class SambaAdElement extends HTMLElement {
     const host = this.querySelector('#sc-metrics');
     if (!host) return;
     const series = [
-      { q: 'samba_ad_up{plugin="samba-ad"}', label: 'DC up (1/0)', color: '#2e8b57' },
-      { q: 'samba_ad_ldap_reachable{plugin="samba-ad"}', label: 'LDAP :389 reachable', color: '#4c6fff' },
-      { q: 'samba_ad_replicas_ready{plugin="samba-ad"}', label: 'Replicas ready', color: '#8b5cf6' },
-      { q: 'samba_ad_restarts_total{plugin="samba-ad"}', label: 'Restarts', color: '#e11d48' },
+      { q: 'samba_ad_up{plugin="samba-ad"}', label: 'DC ready', kind: 'bool', good: 1 },
+      { q: 'samba_ad_ldap_reachable{plugin="samba-ad"}', label: 'LDAP :389', kind: 'bool', good: 1 },
+      { q: 'samba_ad_keycloak_federation_up{plugin="samba-ad"}', label: 'Keycloak federation', kind: 'bool', good: 1 },
+      { q: 'samba_ad_replicas_ready{plugin="samba-ad"}', label: 'Replicas ready', kind: 'count' },
+      { q: 'samba_ad_replicas_desired{plugin="samba-ad"}', label: 'Replicas desired', kind: 'count' },
+      { q: 'samba_ad_restarts_total{plugin="samba-ad"}', label: 'Restart delta', kind: 'counter' },
     ];
     try {
-      const results = await Promise.all(series.map((s) =>
-        fetch(`${API_BASE}/api/metrics/range?q=${encodeURIComponent(s.q)}&minutes=30`, { cache: 'no-store' })
+      const results = await Promise.all(series.map((x) =>
+        fetch(`${API_BASE}/api/metrics/range?q=${encodeURIComponent(x.q)}&minutes=30`, { cache: 'no-store' })
           .then((r) => r.ok ? r.json() : null).catch(() => null)));
-      const cards = results.map((res, i) => {
-        const s = series[i];
-        const pts = res?.data?.result?.[0]?.values;
-        const cur = pts && pts.length ? pts[pts.length - 1][1] : '—';
-        return `<div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><div class="card"><div class="card-block">
-          <div class="os-sub">${esc(s.label)}</div>
-          <p class="p2"><strong>${esc(cur)}</strong></p>
-          ${sparkline(pts, 280, 44, s.color)}
-          <div class="os-sub">최근 30분</div>
-        </div></div></div>`;
+      const aggregateSeries = (matrix, mode = 'max') => {
+        const buckets = new Map();
+        (matrix || []).forEach((serie) => {
+          (serie.values || []).forEach(([ts, value]) => {
+            const key = String(ts);
+            const arr = buckets.get(key) || [];
+            arr.push(Number(value));
+            buckets.set(key, arr);
+          });
+        });
+        return Array.from(buckets.entries())
+          .sort((a, b) => Number(a[0]) - Number(b[0]))
+          .map(([ts, values]) => [Number(ts), String(mode === 'sum'
+            ? values.reduce((a, b) => a + b, 0)
+            : Math.max(...values))]);
+      };
+      const counterDelta = (matrix) => (matrix || []).reduce((total, serie) => {
+        const vals = (serie.values || []).map((x) => Number(x[1]));
+        let delta = 0;
+        for (let n = 1; n < vals.length; n++) delta += Math.max(0, vals[n] - vals[n - 1]);
+        return total + delta;
+      }, 0);
+      const rows = results.map((res, i) => {
+        const meta = series[i];
+        const matrix = res?.data?.result || [];
+        const pts = aggregateSeries(matrix, meta.kind === 'counter' ? 'sum' : 'max');
+        if (!pts || !pts.length) {
+          return `<tr><td>${esc(meta.label)}</td><td><span class="label">No data</span></td><td>n/a</td><td>n/a</td></tr>`;
+        }
+        const vals = pts.map((x) => Number(x[1]));
+        const cur = vals[vals.length - 1];
+        const first = vals[0];
+        const availability = meta.kind === 'bool'
+          ? Math.round((vals.filter((v) => v === meta.good).length / vals.length) * 100)
+          : null;
+        const delta = meta.kind === 'counter' ? counterDelta(matrix) : null;
+        const changedAt = (() => {
+          for (let n = vals.length - 1; n > 0; n--) {
+            if (vals[n] !== vals[n - 1]) return new Date(Number(pts[n][0]) * 1000).toLocaleTimeString();
+          }
+          return 'no transition';
+        })();
+        const cls = meta.kind === 'bool'
+          ? (cur === meta.good ? 'label-success' : 'label-danger')
+          : (meta.kind === 'counter' && delta > 0 ? 'label-warning' : 'label-info');
+        const now = meta.kind === 'bool' ? (cur === meta.good ? 'OK' : 'Down') : (meta.kind === 'counter' ? `+${delta}` : String(cur));
+        const windowText = meta.kind === 'bool'
+          ? `${availability}% available / 30m`
+          : (meta.kind === 'counter' ? `current=${cur}, first=${first}` : `current=${cur}`);
+        return `<tr><td>${esc(meta.label)}</td><td><span class="label ${cls}">${esc(now)}</span></td><td>${esc(windowText)}</td><td>${esc(changedAt)}</td></tr>`;
       }).join('');
       const anyData = results.some((r) => r?.data?.result?.[0]?.values?.length);
-      host.innerHTML = `<div class="os-sech">메트릭 <span class="os-sub">kube-prometheus-stack · 30분</span></div>
-        ${anyData ? `<div class="clr-row">${cards}</div>`
-          : '<p class="os-sub">아직 시계열이 없습니다 — ServiceMonitor 스크레이프 누적을 기다리는 중이거나 Prometheus 연결을 확인하세요.</p>'}`;
+      host.innerHTML = `<div class="os-sech">Metrics <span class="os-sub">operational signals, last 30 minutes</span></div>
+        ${anyData ? `<div class="card"><div class="card-block">
+          <table class="table"><thead><tr><th>Signal</th><th>Now</th><th>Window</th><th>Last transition</th></tr></thead><tbody>${rows}</tbody></table>
+          <p class="os-sub">Boolean health signals are shown as state and availability, not as line charts. Restart is shown as a 30m counter delta.</p>
+        </div></div>` : '<p class="os-sub">No metric samples yet. Check ServiceMonitor scraping and Prometheus connectivity.</p>'}`;
     } catch (e) {
-      host.innerHTML = `<div class="os-sech">메트릭</div><p class="os-sub">차트 조회 실패: ${esc(e)}</p>`;
+      host.innerHTML = `<div class="os-sech">Metrics</div><p class="os-sub">Metric lookup failed: ${esc(e)}</p>`;
     }
   }
 
-  // 백업(Velero) 실 상태 — Schedule/Backup(velero.io, ns velero)을 foundation 프록시(사용자 임퍼소네이션)로 조회.
-  // plugin SA엔 velero 권한 없음 — velero 페이지 install()과 동형 write-path(콘솔 사용자 RBAC).
   async _loadBackup() {
     const host = this.querySelector('#sc-backup');
     if (!host) return;
@@ -429,10 +499,33 @@ class SambaAdElement extends HTMLElement {
     return `/p/foundation/samba${suffix}${location.search}${location.hash}`;
   }
 
+  manageTab() {
+    try {
+      const parts = location.pathname.split('/').filter(Boolean);
+      const i = parts.indexOf('samba');
+      const t = i >= 0 && parts[i + 1] === 'manage' ? (parts[i + 2] || '') : '';
+      return ['overview', 'config', 'backup', 'metrics', 'logs', 'events'].includes(t) ? t : 'overview';
+    } catch { return 'overview'; }
+  }
+
+  managePath(tab) {
+    return `/p/foundation/samba/manage/${tab}${location.search}${location.hash}`;
+  }
+
+  manageNav(active) {
+    const tabs = [
+      ['overview', 'Overview'], ['config', 'Config'], ['backup', 'Backup'],
+      ['metrics', 'Metrics'], ['logs', 'Logs'], ['events', 'Events'],
+    ];
+    return `<nav class="subnav" aria-label="Samba-AD manage sections">
+      <ul class="nav" role="tablist">${tabs.map(([id, label]) => `
+        <li class="nav-item" role="presentation"><a href="${esc(this.managePath(id))}" class="nav-link ${active === id ? 'active' : ''}" role="tab" aria-selected="${active === id ? 'true' : 'false'}" data-sc-tab="${esc(id)}">${esc(label)}</a></li>`).join('')}</ul>
+    </nav>`;
+  }
   lifecycleStage(pf) {
     const state = pf?.installState || 'Blocked';
     if (state === 'Installed') return 'manage';
-    if (state === 'AwaitingInput' || state === 'AwaitingInstall' || state === 'ReadyToApply' || state === 'Deploying') return 'install';
+    if (state === 'ReadyToApply' || state === 'Deploying') return 'install';
     return 'preflight';
   }
 
@@ -442,24 +535,42 @@ class SambaAdElement extends HTMLElement {
         e.preventDefault();
         const stage = el.getAttribute('data-sc-action') || 'preflight';
         history.pushState(history.state, '', this.stagePath(stage));
-        this._load().then(() => {
-          if (stage === 'manage') { this._loadCharts(); this._loadLogs(); this._loadBackup(); }
-        });
+        this._load().then(() => this._afterRenderLoads());
+      });
+    });
+    this.querySelectorAll('[data-sc-tab]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        history.pushState(history.state, '', this.managePath(el.getAttribute('data-sc-tab') || 'overview'));
+        this._load().then(() => this._afterRenderLoads());
       });
     });
   }
 
-  stageNav(active, pf) {
+  lifecycleBadge(pf) {
     const state = pf?.installState || 'Unknown';
-    const cls = (s) => active === s ? 'label-info' : '';
-    const done = (s) => (s === 'preflight' && ['AwaitingInput', 'AwaitingInstall', 'ReadyToApply', 'Deploying', 'Installed'].includes(state))
-      || (s === 'install' && ['Deploying', 'Installed'].includes(state));
-    return `<div class="os-actions">
-      <span class="label ${cls('preflight')}">${done('preflight') ? 'Done' : 'Now'}: Preflight</span>
-      <span class="label ${cls('install')}">${done('install') ? 'Done' : (active === 'install' ? 'Now' : 'Next')}: Install</span>
-      <span class="label ${cls('manage')}">${state === 'Installed' ? 'Now' : 'Locked'}: Manage</span>
-      <span class="os-sub">lifecycle=${esc(state)}</span>
-    </div>`;
+    const cls = state === 'Installed' ? 'label-success'
+      : (state === 'Blocked' ? 'label-danger' : 'label-info');
+    return `<span class="label ${cls}">${esc(state)}</span>`;
+  }
+
+  foundationProcess(d) {
+    const pf = d.preflight || {};
+    const has = (id) => (pf.checks || []).find((c) => c.id === id);
+    const pluginApi = has('plugin-api');
+    const model = has('foundation-model');
+    const rows = [
+      ['Plugin package', pluginApi?.state || 'info', pluginApi?.message || 'UIPluginPackage signature, manifest, and backend route are verified by Foundation.'],
+      ['Manual registration', 'pass', 'manual:contribute registers Samba-AD operating manual into the Manual Registry during plugin activation.'],
+      ['Metrics registration', 'pass', 'ServiceMonitor and /metrics expose Samba-AD health, LDAP reachability, replicas, and restart signals.'],
+      ['CLI registration', 'pass', 'cli.namespace=ad exposes os ad preflight/status/describe/events through the plugin CLI manifest.'],
+      ['Log registration', 'pass', '/api/logs binds the manage Logs section to the central Loki path for Samba-AD pod stdout.'],
+      ['Operand declaration', has('operand-render')?.state || 'info', has('operand-render')?.message || '/operand/manifests declares PVC, Service, Deployment, and NetworkPolicy.'],
+      ['Foundation model gate', model?.state || 'info', model?.message || 'FoundationModel/identity is the lifecycle source of truth.'],
+    ];
+    const cls = (state) => ({ pass: 'label-success', warn: 'label-warning', fail: 'label-danger', info: 'label-info' }[state] || 'label-info');
+    return `<table class="table"><thead><tr><th>Foundation process</th><th>Status</th><th>Evidence</th></tr></thead>
+      <tbody>${rows.map(([name, state, detail]) => `<tr><td>${esc(name)}</td><td><span class="label ${cls(state)}">${esc(String(state).toUpperCase())}</span></td><td>${esc(detail)}</td></tr>`).join('')}</tbody></table>`;
   }
 
   preflight(d) {
@@ -476,6 +587,23 @@ class SambaAdElement extends HTMLElement {
       fail: 'BLOCK',
       info: 'INFO',
     }[state] || esc(state));
+    const blockers = (pf.checks || []).filter((c) => c.state === 'fail');
+    const blockerHtml = blockers.map((c) => {
+      const ex = explainBlocker(c);
+      return `
+        <div style="margin-top:.5rem;">
+          <span class="label label-danger">BLOCK</span>
+          <strong style="margin-left:.35rem;">${esc(ex.title)}</strong>
+          <div class="os-sub" style="margin-top:.35rem;"><strong>문제</strong> ${esc(ex.problem)}</div>
+          <div class="os-sub"><strong>영향</strong> ${esc(ex.impact)}</div>
+          <div class="os-sub"><strong>해결</strong> ${esc(ex.fix)}</div>
+        </div>`;
+    }).join('');
+    const blockerSummary = blockers.length ? `
+      <div style="margin:.5rem 0 1rem 0;padding:.65rem .75rem;border-left:3px solid #c21d00;background:#fff7f5;">
+        <div style="font-weight:600;margin-bottom:.35rem;">설치를 진행할 수 없는 이유 ${esc(blockers.length)}건</div>
+        ${blockerHtml}
+      </div>` : '';
     const rows = (pf.checks || []).map((c) => `
       <tr>
         <td>${esc(c.label)}</td>
@@ -489,7 +617,7 @@ class SambaAdElement extends HTMLElement {
         : pf.installState === 'AwaitingInput'
           ? '<div class="alert alert-warning"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Preflight passed, but install inputs are still required before apply.</span></div></div></div>'
       : pf.installState === 'Blocked'
-        ? '<div class="alert alert-danger"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Preflight is blocked. Resolve BLOCK items before operand deployment.</span></div></div></div>'
+        ? `<div class="alert alert-danger"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Samba-AD 설치 전 필수 조건이 충족되지 않았습니다. 아래의 문제와 해결 방법을 확인하세요.</span></div></div></div>`
         : pf.installState === 'Deploying'
           ? '<div class="alert alert-warning"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Samba-AD operand exists but is still converging. Continue watching workload, events, metrics, and logs below.</span></div></div></div>'
           : '<div class="alert alert-info"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Samba-AD operand is installed. This preflight section remains as the operational baseline for drift and prerequisite checks.</span></div></div></div>';
@@ -497,6 +625,7 @@ class SambaAdElement extends HTMLElement {
       <div class="os-sech">Preflight <span class="os-sub">Samba-AD operand day-0 readiness</span></div>
       <div class="card"><div class="card-block">
         ${banner}
+        ${blockerSummary}
         <table class="table"><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
           <tbody>${rows || '<tr><td colspan="3">No preflight checks returned.</td></tr>'}</tbody></table>
         <p class="os-sub">state=${esc(pf.installState)} · blockers=${esc(pf.blockers)} · warnings=${esc(pf.warnings)} · mode=${esc(pf.mode || 'unknown')}</p>
@@ -505,24 +634,22 @@ class SambaAdElement extends HTMLElement {
 
   renderPreflight(d) {
     const pf = d.preflight || {};
-    const installed = pf.installState === 'Installed';
-    const next = installed
-      ? '<button class="btn btn-primary btn-sm" data-sc-action="manage">Open current Manage stage</button>'
-      : (pf.blockers === 0
-        ? '<button class="btn btn-primary btn-sm" data-sc-action="install">Continue to Install inputs</button>'
-        : '<button class="btn btn-primary btn-sm" disabled>Resolve BLOCK items first</button>');
+    const next = pf.blockers === 0
+      ? '<button class="btn btn-primary btn-sm" data-sc-action="install">Continue to Install inputs</button>'
+      : '<button class="btn btn-primary btn-sm" disabled>Resolve BLOCK items first</button>';
     this.innerHTML = `
-      <div class="os-title-row"><h2 class="os-h2">Samba-AD Preflight <span class="label label-info">Day-0</span></h2></div>
-      <p class="os-sub">Samba-AD operand를 배포하기 전에 FoundationModel, engine option, realm, StorageClass, secret reference, 소비자 준비 상태를 확인합니다.</p>
-      ${this.stageNav('preflight', pf)}
+      <div class="os-title-row"><h2 class="os-h2">${sambaLogo()}Samba-AD Preflight ${this.lifecycleBadge(pf)}</h2></div>
+      <p class="os-sub">Foundation validates the plugin package and the installation process before the Samba-AD operand is created.</p>
       ${this.preflight(d)}
+      <div class="card"><div class="card-header">Foundation installation process</div><div class="card-block">
+        ${this.foundationProcess(d)}
+      </div></div>
       <div class="card"><div class="card-block">
         <h3 class="card-title">Next</h3>
-        <p class="os-sub">Preflight가 BLOCK 없이 통과하면 Install 단계에서 control-plane apply 계약을 확인합니다. 현재 페이지는 관리 화면이 아니라 배포 전 점검 화면입니다.</p>
+        <p class="os-sub">When all blocking checks pass, the admin continues to the install wizard. Preflight is not a manage page; it exists only before the operand lifecycle advances.</p>
         <div class="os-actions">${next}</div>
       </div></div>`;
   }
-
   renderInstall(d) {
     const pf = d.preflight || {};
     const installed = pf.installState === 'Installed';
@@ -530,9 +657,8 @@ class SambaAdElement extends HTMLElement {
     const canApply = !!pf.readyToApply;
     const scInstall = this._scSelect(d).replace('id="sc-cfg-sc"', 'id="sc-install-sc"');
     this.innerHTML = `
-      <div class="os-title-row"><h2 class="os-h2">Samba-AD Install <span class="label label-info">Day-1</span></h2></div>
+      <div class="os-title-row"><h2 class="os-h2">${sambaLogo()}Samba-AD Install <span class="label label-info">Day-1</span></h2></div>
       <p class="os-sub">Preflight 이후 Samba-AD operand 선언을 control-plane이 적용하는 설치 단계입니다.</p>
-      ${this.stageNav('install', pf)}
       <div class="alert ${installed ? 'alert-info' : (pf.blockers === 0 ? 'alert-success' : 'alert-danger')}"><div class="alert-items">
         <div class="alert-item static"><span class="alert-text">${installed
           ? 'Samba-AD operand는 이미 설치되어 있습니다. 설치 후 운영은 Manage 단계에서 확인하세요.'
@@ -582,25 +708,33 @@ class SambaAdElement extends HTMLElement {
   }
 
   render(d) {
-    const requestedStage = this.stage();
-    const stage = requestedStage === 'auto' ? this.lifecycleStage(d.preflight) : requestedStage;
-    if (stage === 'preflight') { this.renderPreflight(d); return; }
-    if (stage === 'install') { this.renderInstall(d); return; }
+    const lifecycle = this.lifecycleStage(d.preflight);
+    if (lifecycle === 'preflight') {
+      const requested = this.stage();
+      if (requested === 'install' && (d.preflight?.blockers || 0) === 0) {
+        this.renderInstall(d);
+        return;
+      }
+      this.renderPreflight(d);
+      return;
+    }
+    if (lifecycle === 'install') { this.renderInstall(d); return; }
 
     const w = d.workload || {};
     const m = d.model || {};
     const bkc = d.backup || {};
     const ded = bkc.dedicated || {};
-    const phase = w.found ? (w.ready ? 'Running' : '기동 중') : '미배포';
+    const activeTab = this.manageTab();
+    const phase = w.found ? (w.ready ? 'Running' : 'Starting') : 'Not deployed';
     const phasePill = w.found ? pill(w.ready, true) : 'label-warning';
-    const realm = w.realmEnv || m.directoryRealm || '—';
-    const baseDn = realm !== '—' ? 'DC=' + realm.split('.').join(',DC=') : '—';
+    const realm = w.realmEnv || m.directoryRealm || '-';
+    const baseDn = realm !== '-' ? 'DC=' + realm.split('.').join(',DC=') : '-';
 
     const notDeployed = !w.found ? `
       <div class="alert ${m.engineOpt === 'disabled' ? 'alert-warning' : 'alert-info'}"><div class="alert-items">
         <div class="alert-item static"><span class="alert-text">${m.engineOpt === 'disabled'
-          ? 'engines 설치옵션으로 비활성(FoundationModel/identity · parameters.engines.samba=disabled) — Foundation Plugins 관리에서 Enable하면 control-plane이 선언형(SSA)으로 배포합니다.'
-          : `디렉터리 워크로드가 아직 없습니다 — FoundationModel/identity 적용 시 자동 배포(모델 phase: ${esc(m.phase)}).`}</span></div>
+          ? 'Samba-AD engine is disabled. Start install from the Install stage to enable engines.samba and let the control-plane apply the operand.'
+          : `Samba-AD workload is not deployed yet. FoundationModel phase: ${esc(m.phase)}`}</span></div>
       </div></div>` : '';
 
     const observedRows = (m.observed || []).map((o) => `
@@ -612,87 +746,113 @@ class SambaAdElement extends HTMLElement {
       <tr><td><span class="label ${e.type === 'Warning' ? 'label-warning' : ''}">${esc(e.type)}</span></td>
       <td class="os-mono">${esc(e.reason)}</td><td>${esc(e.message)}</td><td>${esc(e.time)}</td></tr>`).join('');
 
-    this.innerHTML = `
-      <div class="os-title-row"><h2 class="os-h2">Samba-AD <span class="label label-info">plugin</span> <span class="label ${phasePill}">${esc(phase)}</span></h2></div>
-      <p class="os-sub">workspace/사원 디렉터리 · Samba Active Directory DC · realm ${esc(realm)} · ns ${esc(d.meta?.ns)}
-        · <strong>독립 서명 plugin(OpenSphere-plugin-samba-ad) — 기능 컨테이너 ${esc(d.meta?.servedBy)}가 서빙, Foundation(host)이 안층 마운트</strong></p>
-      ${this.stageNav('manage', d.preflight)}
-      ${notDeployed}
+    const relationHtml = `<div class="card"><div class="card-header">Service relationship</div><div class="card-block">
       <div class="clr-row">
-        ${this.card(`디렉터리 실물 <span class="os-mono">${esc('foundation-identity-samba')}</span>`, `
-          <table class="table"><tbody>${this.kv([
-            ['상태', `<span class="label ${phasePill}">${esc(phase)}</span> ${w.found ? esc(`${w.readyReplicas}/${w.replicas} ready`) : ''}`],
-            ['이미지', `<span class="os-mono">${esc(w.image)}</span>`],
-            ['Node / 재시작', esc(`${w.node ?? '—'} / ${w.restarts ?? '—'}`)],
-            ['데이터', `<span class="os-mono">PVC foundation-identity-samba-data</span> (SAM DB — 회수 시에도 보존)`],
-          ])}</tbody></table>`)}
-        ${this.card('연결 — 상위 서비스 소비점', `
-          <table class="table"><tbody>${this.kv([
-            ['LDAP', `<span class="os-mono">${esc(m.ldapURL)}</span>`],
-            ['Base DN', `<span class="os-mono">${esc(baseDn)}</span>`],
-            ['LDAPS · Kerberos', '<span class="os-mono">:636 · :88</span>'],
-            ['DNS · SMB', '<span class="os-mono">:53(tcp/udp) · :445</span>'],
-          ])}</tbody></table>
-          <p class="os-sub">소비 좌표 정본 = FoundationModel/identity <span class="os-mono">status.ldapURL</span>(control-plane 기록).</p>`)}
-        ${this.card(`모델 신호 — FoundationModel/identity <span class="label ${m.phase === 'Installed' ? 'label-success' : 'label-warning'}">${esc(m.phase)}</span>`, m.found ? `
-          <table class="table"><thead><tr><th>신호</th><th>값</th><th>출처</th></tr></thead>
-          <tbody>${observedRows || '<tr><td colspan="3">관측 신호 없음</td></tr>'}</tbody></table>
-          <p class="os-sub">관측 ${esc(m.observedAt)} · ${esc(m.controlPlane)}</p>`
-          : '<p class="os-sub">FoundationModel/identity CR 없음 — deploy/foundationmodels.yaml 적용 필요.</p>')}
-        ${this.card('소비자 — Keycloak federation', `
-          <table class="table"><tbody>${this.kv([
-            ['Keycloak', `<span class="label ${d.keycloak?.found ? pill(d.keycloak.ready, true) : ''}">${d.keycloak?.found ? (d.keycloak.ready ? 'Running' : '기동 중') : '미배포'}</span> <span class="os-mono">${esc(d.keycloak?.name)}</span>`],
-            ['연동', `User Federation → 이 LDAP(<span class="os-mono">${esc(m.ldapURL)}</span>)`],
-          ])}</tbody></table>
-          <p class="os-sub">Keycloak(identity.iam.workspace)이 이 디렉터리를 federation해 사원 로그인을 제공.</p>`)}
+        <div class="clr-col-12 clr-col-md-4">
+          <h4>Foundation identity model</h4>
+          <p><span class="label ${m.phase === 'Installed' ? 'label-success' : 'label-warning'}">${esc(m.phase || 'Unknown')}</span></p>
+          <p class="os-sub">Owns lifecycle, install parameters, and declared endpoint status.</p>
+        </div>
+        <div class="clr-col-12 clr-col-md-4">
+          <h4>${sambaLogo(28)}Samba-AD directory</h4>
+          <p><span class="label ${phasePill}">${esc(phase)}</span> ${w.found ? esc(`${w.readyReplicas}/${w.replicas} ready`) : ''}</p>
+          <p class="os-sub"><span class="os-mono">${esc(m.ldapURL || '-')}</span></p>
+        </div>
+        <div class="clr-col-12 clr-col-md-4">
+          <h4>Connected consumers</h4>
+          <p><span class="label ${d.keycloak?.found ? pill(d.keycloak.ready, true) : 'label-warning'}">Keycloak ${d.keycloak?.ready ? 'ready' : 'pending'}</span></p>
+          <p class="os-sub">User Federation reads LDAP from Samba-AD. Other consumers must bind through Foundation claims.</p>
+        </div>
       </div>
-      <div class="os-sech">도메인 · 설정 <span class="os-sub">FoundationModel/identity · parameters.samba (선언형 write-path)</span></div>
-      <div class="card"><div class="card-block"><div class="clr-row">
-        <div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><label class="os-sub">도메인(realm)<input id="sc-cfg-domain" class="os-filter" value="${esc((d.config || {}).domain)}"></label></div>
-        <div class="clr-col-12 clr-col-md-6 clr-col-lg-2"><label class="os-sub">replicas<input id="sc-cfg-replicas" class="os-filter" type="number" min="1" value="${esc((d.config || {}).replicas)}"></label></div>
-        <div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><label class="os-sub">StorageClass${this._scSelect(d)}</label></div>
-        <div class="clr-col-12 clr-col-md-6 clr-col-lg-2"><label class="os-sub">DNS forwarder<input id="sc-cfg-dns" class="os-filter" value="${esc((d.config || {}).dnsForwarder)}"></label></div>
-        <div class="clr-col-12 clr-col-lg-2 os-actions"><button id="sc-cfg-save" class="btn btn-primary btn-sm">적용</button></div>
-      </div><p id="sc-cfg-status" class="os-sub"></p>
-      <p class="os-sub">⚠️ 도메인/replicas 변경은 control-plane 재조정 시 operand 재렌더 → pod 재기동을 유발합니다(PVC=SAM DB는 보존). 사용자·그룹은 samba-tool.</p>
-      </div></div>
-      <div class="os-sech">백업 <span class="os-sub">Velero · 중앙 백업 등록 · 공용 기본 + 전용 override</span></div>
+    </div></div>`;
+
+    const overviewHtml = `${notDeployed}${relationHtml}<div class="clr-row">
+      ${this.card(`Directory workload <span class="os-mono">${esc('foundation-identity-samba')}</span>`, `
+        <table class="table"><tbody>${this.kv([
+          ['Status', `<span class="label ${phasePill}">${esc(phase)}</span> ${w.found ? esc(`${w.readyReplicas}/${w.replicas} ready`) : ''}`],
+          ['Image', `<span class="os-mono">${esc(w.image)}</span>`],
+          ['Node / Restarts', esc(`${w.node ?? '-'} / ${w.restarts ?? '-'}`)],
+          ['Persistent data', `<span class="os-mono">PVC foundation-identity-samba-data</span>`],
+        ])}</tbody></table>`)}
+      ${this.card('Directory endpoints', `
+        <table class="table"><tbody>${this.kv([
+          ['LDAP', `<span class="os-mono">${esc(m.ldapURL)}</span>`],
+          ['Base DN', `<span class="os-mono">${esc(baseDn)}</span>`],
+          ['LDAPS / Kerberos', '<span class="os-mono">:636 / :88</span>'],
+          ['DNS / SMB', '<span class="os-mono">:53(tcp/udp) / :445</span>'],
+        ])}</tbody></table>`)}
+      ${this.card(`FoundationModel/identity <span class="label ${m.phase === 'Installed' ? 'label-success' : 'label-warning'}">${esc(m.phase)}</span>`, m.found ? `
+        <table class="table"><thead><tr><th>Signal</th><th>Value</th><th>Source</th></tr></thead><tbody>${observedRows || '<tr><td colspan="3">No observed signals.</td></tr>'}</tbody></table>
+        <p class="os-sub">Observed at ${esc(m.observedAt)} / ${esc(m.controlPlane)}</p>` : '<p class="os-sub">FoundationModel/identity is not readable.</p>')}
+      ${this.card('Consumer: Keycloak federation', `
+        <table class="table"><tbody>${this.kv([
+          ['Keycloak', `<span class="label ${d.keycloak?.found ? pill(d.keycloak.ready, true) : ''}">${d.keycloak?.found ? (d.keycloak.ready ? 'Running' : 'Starting') : 'Not deployed'}</span> <span class="os-mono">${esc(d.keycloak?.name)}</span>`],
+          ['Binding', `User Federation -> LDAP(<span class="os-mono">${esc(m.ldapURL)}</span>)`],
+        ])}</tbody></table>`)}
+    </div>`;
+
+    const configHtml = `<div class="os-sech">Configuration</div>
+      <div class="clr-row">
+        <div class="clr-col-12 clr-col-lg-8">
+          <div class="card"><div class="card-header">Directory deployment parameters</div><div class="card-block">
+            <div class="clr-row">
+              <div class="clr-col-12 clr-col-md-6"><label class="os-sub">Realm<input id="sc-cfg-domain" class="os-filter" value="${esc((d.config || {}).domain)}"></label></div>
+              <div class="clr-col-12 clr-col-md-3"><label class="os-sub">Replicas<input id="sc-cfg-replicas" class="os-filter" type="number" min="1" value="${esc((d.config || {}).replicas)}"></label></div>
+              <div class="clr-col-12 clr-col-md-3"><label class="os-sub">DNS forwarder<input id="sc-cfg-dns" class="os-filter" value="${esc((d.config || {}).dnsForwarder)}"></label></div>
+              <div class="clr-col-12 clr-col-md-6"><label class="os-sub">StorageClass${this._scSelect(d)}</label></div>
+              <div class="clr-col-12 clr-col-md-6" style="display:flex; align-items:flex-end; gap:.5rem;">
+                <button id="sc-cfg-save" class="btn btn-primary btn-sm" style="margin:0;">Apply</button>
+                <span id="sc-cfg-status" class="os-sub"></span>
+              </div>
+            </div>
+          </div></div>
+        </div>
+        <div class="clr-col-12 clr-col-lg-4">
+          <div class="card"><div class="card-header">Control boundary</div><div class="card-block">
+            <table class="table table-compact"><tbody>${this.kv([
+              ['Source', '<span class="os-mono">FoundationModel/identity</span>'],
+              ['Path', '<span class="os-mono">spec.parameters.samba</span>'],
+              ['Directory objects', 'Managed outside this page'],
+            ])}</tbody></table>
+            <p class="os-sub">Replica and network changes are reconciled by the control-plane. Users, groups, and policies belong to AD tools such as samba-tool or RSAT.</p>
+          </div></div>
+        </div>
+      </div>`;
+
+    const backupHtml = `<div class="os-sech">Backup <span class="os-sub">Velero schedule and restore substrate</span></div>
       <div class="card"><div class="card-block">
-        <div id="sc-backup"><p class="os-sub">백업 상태 로딩…</p></div>
+        <div id="sc-backup"><p class="os-sub">Loading backup status...</p></div>
         <div class="clr-row">
-          <div class="clr-col-12 clr-col-md-4"><label class="os-sub">백업 대상<select id="sc-bk-mode" class="os-filter">
-            <option value="shared"${bkc.mode !== 'dedicated' ? ' selected' : ''}>공용 기본 (Velero default BSL)</option>
-            <option value="dedicated"${bkc.mode === 'dedicated' ? ' selected' : ''}>전용 외부 대상 (samba-ad BSL)</option>
+          <div class="clr-col-12 clr-col-md-4"><label class="os-sub">Backup target<select id="sc-bk-mode" class="os-filter">
+            <option value="shared"${bkc.mode !== 'dedicated' ? ' selected' : ''}>Shared default BSL</option>
+            <option value="dedicated"${bkc.mode === 'dedicated' ? ' selected' : ''}>Dedicated samba-ad BSL</option>
           </select></label></div>
-          <div class="clr-col-12 clr-col-md-4"><label class="os-sub">일정 (cron)<input id="sc-bk-cron" class="os-filter" value="${esc(bkc.schedule || '0 2 * * *')}"></label></div>
-          <div class="clr-col-12 clr-col-md-4 os-actions">
-            <button id="sc-bk-save" class="btn btn-primary btn-sm">백업 활성화·저장</button>
-            <button id="sc-bk-now" class="btn btn-outline btn-sm">지금 백업</button>
-          </div>
+          <div class="clr-col-12 clr-col-md-4"><label class="os-sub">Schedule (cron)<input id="sc-bk-cron" class="os-filter" value="${esc(bkc.schedule || '0 2 * * *')}"></label></div>
+          <div class="clr-col-12 clr-col-md-4 os-actions"><button id="sc-bk-save" class="btn btn-primary btn-sm">Enable backup</button><button id="sc-bk-now" class="btn btn-outline btn-sm">Backup now</button></div>
         </div>
         <div id="sc-bk-dedicated" class="clr-row"${bkc.mode === 'dedicated' ? '' : ' hidden'}>
-          <div class="clr-col-12 clr-col-md-3"><label class="os-sub">엔드포인트(s3Url)<input id="sc-bk-ep" class="os-filter" value="${esc(ded.endpoint || '')}" placeholder="https://s3.example.com"></label></div>
-          <div class="clr-col-12 clr-col-md-3"><label class="os-sub">버킷<input id="sc-bk-bucket" class="os-filter" value="${esc(ded.bucket || '')}" placeholder="samba-ad-backup"></label></div>
-          <div class="clr-col-12 clr-col-md-2"><label class="os-sub">리전<input id="sc-bk-region" class="os-filter" value="${esc(ded.region || '')}" placeholder="us-east-1"></label></div>
+          <div class="clr-col-12 clr-col-md-3"><label class="os-sub">S3 URL<input id="sc-bk-ep" class="os-filter" value="${esc(ded.endpoint || '')}" placeholder="https://s3.example.com"></label></div>
+          <div class="clr-col-12 clr-col-md-3"><label class="os-sub">Bucket<input id="sc-bk-bucket" class="os-filter" value="${esc(ded.bucket || '')}" placeholder="samba-ad-backup"></label></div>
+          <div class="clr-col-12 clr-col-md-2"><label class="os-sub">Region<input id="sc-bk-region" class="os-filter" value="${esc(ded.region || '')}" placeholder="us-east-1"></label></div>
           <div class="clr-col-12 clr-col-md-2"><label class="os-sub">Access Key<input id="sc-bk-ak" class="os-filter" autocomplete="off"></label></div>
           <div class="clr-col-12 clr-col-md-2"><label class="os-sub">Secret Key<input id="sc-bk-sk" class="os-filter" type="password" autocomplete="off"></label></div>
         </div>
         <p id="sc-bk-status" class="os-sub"></p>
-        <p class="os-sub">공용 기본은 <span class="os-mono">BSS → Velero</span>에서 구성한 외부 S3(default BSL)를 사용합니다. 전용은 이 워크로드만의 외부 대상(별도 samba-ad BSL)입니다. 백업은 node-agent 파일시스템 백업으로 PVC(SAM DB)를 담고, 자격증명은 velero 네임스페이스 Secret에만 저장됩니다.</p>
-      </div></div>
-      <div id="sc-metrics"><div class="os-sech">메트릭 <span class="os-sub">kube-prometheus-stack</span></div><p class="os-sub">차트 로딩…</p></div>
-      <div class="os-sech">로그 <span class="os-sub">Loki · samba pod stdout · 최근 60분</span></div>
-      <div id="sc-logs" class="vl-log"><div class="vl-log-empty">로그 로딩…</div></div>
-      <div class="os-sech">운영 이벤트 <span class="os-sub">K8s events</span></div>
-      ${eventRows ? `<table class="table"><thead><tr><th>유형</th><th>사유</th><th>메시지</th><th>시각</th></tr></thead><tbody>${eventRows}</tbody></table>`
-        : '<p class="os-sub">최근 이벤트 없음.</p>'}
-      <div class="alert alert-info"><div class="alert-items">
-        <div class="alert-item static"><span class="alert-text">
-          수명주기(Enable/Disable)는 Foundation Plugins 관리(FoundationModel engines 설치옵션)가 정본.
-          사용자·그룹 생성은 samba-tool/RSAT — 콘솔은 선언형 원칙(ADR-FND-001)상 디렉터리 내용을 명령형으로 조작하지 않는다.
-        </span></div>
       </div></div>`;
+
+    const metricsHtml = `<div id="sc-metrics"><div class="os-sech">Metrics</div><p class="os-sub">Loading metrics...</p></div>`;
+    const logsHtml = `<div class="os-sech">Logs <span class="os-sub">Loki / samba pod stdout / last 60 minutes</span></div><div id="sc-logs" class="vl-log"><div class="vl-log-empty">Loading logs...</div></div>`;
+    const eventsHtml = `<div class="os-sech">Events <span class="os-sub">Kubernetes events</span></div>${eventRows ? `<table class="table"><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Time</th></tr></thead><tbody>${eventRows}</tbody></table>` : '<p class="os-sub">No recent events.</p>'}`;
+
+    const content = { overview: overviewHtml, config: configHtml, backup: backupHtml, metrics: metricsHtml, logs: logsHtml, events: eventsHtml }[activeTab] || overviewHtml;
+
+    this.innerHTML = `
+      <div class="os-title-row"><h2 class="os-h2">${sambaLogo()}Samba-AD <span class="label label-info">plugin</span> <span class="label ${phasePill}">${esc(phase)}</span></h2></div>
+      <p class="os-sub">Workforce directory / Samba Active Directory DC / realm ${esc(realm)} / ns ${esc(d.meta?.ns)} / served by ${esc(d.meta?.servedBy)}</p>
+      ${this.manageNav(activeTab)}
+      ${content}`;
   }
+
 }
 
 // ── 자기 매뉴얼(§매뉴얼 통합) — 설치(로드)되면서 자신의 운영 매뉴얼을 셸 Manual Registry에 기여 ──

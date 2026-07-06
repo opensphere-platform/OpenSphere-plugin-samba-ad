@@ -1,42 +1,39 @@
-# Samba-AD — 독립 plugin(D1 승격, 2026-07-06). 폴더=컨테이너=신뢰·서명 경계(OpenSphere-plugin-* 규약).
-# kind=plugin, hostRef=foundation(manifest) — 콘솔 DUPA 신뢰체인(이중 서명검증)으로 적재되되
-# registerPage 미호출로 mainShell 1단에 비노출, Foundation(host)이 안층에서 <osp-samba-ad> 마운트.
-# digest/sha256/keyId는 관리자 승인값 = 신뢰 루트(S1: digest는 sha256 필수 — CRD pattern 강제).
+# Samba-AD independent plugin package.
+# The image digest, manifest digest, and trust key are administrator-approved
+# trust pins. The plugin is mounted inside the Foundation host and is not
+# exposed as a first-level main-shell navigation item.
 apiVersion: plugins.opensphere.io/v1alpha1
 kind: UIPluginPackage
 metadata:
   name: samba-ad
   namespace: opensphere-system
-  labels: { opensphere.io/host-ref: foundation }
+  labels:
+    opensphere.io/host-ref: foundation
 spec:
   displayName: "Samba-AD"
   owner: platform-foundation
   version: 0.1.0
-  description: "workspace/사원 디렉터리(Samba AD DC) 관리 plugin — Foundation 안층 마운트(hostRef=foundation)"
-  serviceAccountName: opensphere-plugin-samba-ad   # rbac.yaml — 전용 SA 최소권한(읽기)
+  description: "Workspace directory management plugin for Samba AD DC, mounted inside Foundation."
+  serviceAccountName: opensphere-plugin-samba-ad
   image:
     repository: ghcr.io/opensphere-platform/plugin-samba-ad
-    digest: sha256:979cd1b9c1f53037abf125718e0221718ddea5824624b94c845addf3491e7b48  # lifecycle process with Start install
+    digest: sha256:10579e50ae6d254586d1b8f7ee47da300f937f38ab26185a1ee14a7a02983058
   nav:
-    band: "운영 Operate"
+    band: "Operate"
     label: "Samba-AD"
   manifest:
     path: /plugins/ui-shell.manifest.json
-    sha256: "06796f5e48682b7791d38933db290c7d80a584a7529ed4f26a98eb91f05cc97a"
+    sha256: "8f5a80ee3352a386080d2fc30fd361106b0a610baa7d512a1e14756d40d06f4c"
     signaturePath: /plugins/ui-shell.manifest.json.sig
   trust:
-    keyId: opensphere-plugins-v2
+    keyId: opensphere-plugins-v3-samba-ad
   shellCompat: ">=0.2.0 <0.9.0"
-  # Extension Host는 page:register 권한이 있어야 plugin activate를 수행한다.
-  # exposeInNavigation=false + registerPage 미호출로 mainShell 1단 노출은 막고, Foundation 안층 mount만 허용한다.
   permissions:
     - page:register
     - api:proxy
     - manual:contribute
   api:
     basePath: /api/plugins/samba-ad
-  # cli:contribute(2026-07-06) — os CLI에 'ad' 명령 네임스페이스 기여(headless binding).
-  #   registry가 광고 → os가 <console>/api/plugins/samba-ad/cli/manifest 조회 → os ad status/describe/events.
   cli:
     namespace: ad
     manifestPath: /cli/manifest
@@ -53,7 +50,7 @@ spec:
   installPolicy:
     createWorkload: true
     createProxyRoute: true
-    exposeInNavigation: false   # host(Foundation) 안층 표시 — mainShell 1단 비노출(선언적 의도 표기)
+    exposeInNavigation: false
   approval:
     requestedBy: cmars
-    reason: "D1 승격 — Samba-AD 독립 plugin(hostRef=foundation)"
+    reason: "Samba-AD independent plugin mounted inside Foundation."

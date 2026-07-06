@@ -18,6 +18,7 @@ const APISERVER = 'https://kubernetes.default.svc';
 const FND_NS = process.env.FOUNDATION_NS || 'opensphere-foundation';
 const SAMBA = 'foundation-identity-samba';
 const KEYCLOAK = 'foundation-identity-keycloak';
+const CROSSPLANE_NS = process.env.CROSSPLANE_NS || 'crossplane-system';
 // self-contained(2026-07-06): operand(AD DC 실물) 배포 선언을 이 plugin이 소유한다.
 // control-plane은 GET /operand/manifests로 이 선언을 받아 SSA apply만 한다("내민 선언을 apply").
 const SAMBA_IMAGE = process.env.SAMBA_IMAGE || 'ghcr.io/opensphere-platform/mirror/samba-domain:20260706';
@@ -31,15 +32,24 @@ const SAMBA_CREDS_KEY = 'domain-password';
 // 설정 정본 = FoundationModel/identity.spec.parameters.samba (없으면 dev 기본값 — 단, 비밀번호는 여기 없음).
 // 3단계 설정 페이지가 이 필드를 PATCH하면 control-plane 재조정 시 operand가 재렌더된다.
 const SAMBA_DEFAULTS = { domain: 'OPENSPHERE.LOCAL', replicas: 1, storageClass: 'standard', dnsForwarder: '8.8.8.8' };
+function valueSource(obj, key) {
+  return obj && Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined && obj[key] !== ''
+    ? 'FoundationModel.spec.parameters.samba'
+    : 'plugin default';
+}
 async function readSambaConfig() {
   const fm = await k8sGet('/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity');
   const p = (!fm.__status && fm.spec?.parameters?.samba) || {};
   // 비밀번호(domainPass)는 의도적으로 제외 — operand는 Secret(secretKeyRef)에서 받는다.
   return {
     domain: p.domain || SAMBA_DEFAULTS.domain,
+    domainSource: valueSource(p, 'domain'),
     replicas: Number.isInteger(p.replicas) ? p.replicas : SAMBA_DEFAULTS.replicas,
+    replicasSource: valueSource(p, 'replicas'),
     storageClass: p.storageClass || SAMBA_DEFAULTS.storageClass,
+    storageClassSource: valueSource(p, 'storageClass'),
     dnsForwarder: p.dnsForwarder || SAMBA_DEFAULTS.dnsForwarder,
+    dnsForwarderSource: valueSource(p, 'dnsForwarder'),
   };
 }
 
@@ -139,12 +149,47 @@ function workloadView(dep, pods) {
   };
 }
 
+function deploymentReady(dep) {
+  return !dep.__status && (dep.status?.readyReplicas ?? 0) >= 1;
+}
+
+function conditionTrue(obj, type) {
+  return (obj?.status?.conditions || []).some((c) => c.type === type && c.status === 'True');
+}
+
+function providerReady(list, namePart) {
+  const item = (list.items || []).find((p) => String(p.metadata?.name || '').includes(namePart));
+  return {
+    found: !!item,
+    ready: !!item && (conditionTrue(item, 'Healthy') || conditionTrue(item, 'Installed') || conditionTrue(item, 'Ready')),
+    name: item?.metadata?.name || '',
+  };
+}
+
+function crossplaneView(core, rbac, providers, claimCrd, bindingCrd) {
+  const helm = providers.__status ? { found: false, ready: false, status: providers.__status } : providerReady(providers, 'helm');
+  return {
+    namespace: CROSSPLANE_NS,
+    coreReady: deploymentReady(core),
+    coreStatus: core.__status || 200,
+    rbacReady: deploymentReady(rbac),
+    rbacStatus: rbac.__status || 200,
+    providerHelm: helm,
+    identityDirectoryClaimCRD: !claimCrd.__status,
+    identityDirectoryClaimStatus: claimCrd.__status || 200,
+    identityDirectoryBindingCRD: !bindingCrd.__status,
+    identityDirectoryBindingStatus: bindingCrd.__status || 200,
+  };
+}
+
 function sambaPreflight(payload) {
   const w = payload.workload || {};
   const m = payload.model || {};
   const cfg = payload.config || {};
+  const xp = payload.crossplane || {};
   const storageClasses = payload.storageClasses || [];
   const domain = String(cfg.domain || '');
+  const domainSource = cfg.domainSource || 'unknown';
   const replicas = Number(cfg.replicas || 0);
   const hasStorageClassCatalog = storageClasses.length > 0;
   const selectedStorageClass = String(cfg.storageClass || '');
@@ -157,13 +202,27 @@ function sambaPreflight(payload) {
   const secretReady = !!payload.bootstrapSecret?.found;
   const check = (id, label, state, message) => ({ id, label, state, message });
   const checks = [
-    check('plugin-api', 'Plugin API', 'pass', `Samba-AD plugin backend is reachable (${payload.meta?.servedBy || 'unknown'}).`),
+    check('plugin-api', 'Installer API', 'pass', `Samba-AD installer plugin API is reachable (${payload.meta?.servedBy || 'unknown'}).`),
     check('foundation-model', 'FoundationModel/identity', m.found ? 'pass' : 'fail',
       m.found ? `model phase=${m.phase || 'unknown'}` : `FoundationModel/identity is not readable (HTTP ${m.status || 'unknown'}).`),
     check('engine-option', 'engines.samba', engineEnabled ? 'pass' : 'info',
       engineEnabled ? `engine option=${m.engineOpt || 'enabled'}` : 'engine option is disabled; Install step will enable Samba-AD before the control-plane applies the operand.'),
-    check('domain-realm', 'Directory realm', domainOk ? 'pass' : 'fail',
-      domainOk ? `realm=${domain}` : 'realm must be an FQDN-like value such as OPENSPHERE.LOCAL.'),
+    check('crossplane-core', 'Crossplane core', xp.coreReady && xp.rbacReady ? 'pass' : 'fail',
+      xp.coreReady && xp.rbacReady
+        ? `crossplane and rbac-manager are ready in ${xp.namespace || CROSSPLANE_NS}.`
+        : `Crossplane core is required as the standard Samba-AD write-path; coreReady=${!!xp.coreReady}, rbacReady=${!!xp.rbacReady}.`),
+    check('crossplane-provider-helm', 'Crossplane provider-helm', xp.providerHelm?.ready ? 'pass' : 'fail',
+      xp.providerHelm?.ready
+        ? `provider=${xp.providerHelm.name}; Helm Release CRs can be reconciled.`
+        : 'provider-helm is required for Foundation engine delivery and must be Healthy/Installed before Samba-AD install.'),
+    check('identity-claim-binding', 'Identity Claim/Binding contract', xp.identityDirectoryClaimCRD && xp.identityDirectoryBindingCRD ? 'pass' : 'fail',
+      xp.identityDirectoryClaimCRD && xp.identityDirectoryBindingCRD
+        ? 'IdentityDirectoryClaim and IdentityDirectoryBinding CRDs are present; consumers can bind through endpointRef/secretRef/policyRef.'
+        : `Missing IdentityDirectoryClaim/Binding CRDs (claim HTTP ${xp.identityDirectoryClaimStatus || 'unknown'}, binding HTTP ${xp.identityDirectoryBindingStatus || 'unknown'}). Samba-AD install must not proceed until the consumer binding contract exists.`),
+    check('domain-realm', w.found ? 'Actual directory realm' : 'Proposed directory realm', domainOk ? 'pass' : 'fail',
+      domainOk
+        ? (w.found ? `actual=${w.realmEnv || domain}; source=Deployment env DOMAIN` : `proposed=${domain}; source=${domainSource}; final value is confirmed in Install before the operand is created.`)
+        : 'proposed realm must be an FQDN-like value such as EXAMPLE.LOCAL.'),
     check('storage-class', 'StorageClass', storageClassKnown ? 'pass' : (selectedStorageClass ? 'warn' : 'fail'),
       hasStorageClassCatalog
         ? (storageClassKnown ? `selected=${selectedStorageClass}` : `selected=${selectedStorageClass}; not found in cluster StorageClass catalog.`)
@@ -191,8 +250,11 @@ function sambaPreflight(payload) {
   const installState = w.found
     ? (w.ready ? 'Installed' : 'Deploying')
     : (blockers > 0 ? 'Blocked' : (inputBlockers > 0 ? 'AwaitingInput' : (engineEnabled ? 'ReadyToApply' : 'AwaitingInstall')));
+  const mode = w.found
+    ? 'manage'
+    : (installState === 'ReadyToApply' || installState === 'Deploying' ? 'install' : 'preflight');
   return {
-    mode: w.found ? 'manage' : (blockers > 0 ? 'preflight' : 'install'),
+    mode,
     readyToInstall: blockers === 0 && !w.found,
     readyToApply: blockers === 0 && inputBlockers === 0 && engineEnabled && !w.found,
     installState,
@@ -206,7 +268,7 @@ function sambaPreflight(payload) {
 async function sambaPayload() {
   const sel = encodeURIComponent(`app=${SAMBA}`);
   const fsel = encodeURIComponent(`involvedObject.name=${SAMBA}`);
-  const [fm, dep, kcDep, pods, events, scList, secret] = await Promise.all([
+  const [fm, dep, kcDep, pods, events, scList, secret, xpCore, xpRbac, xpProviders, idClaimCrd, idBindingCrd] = await Promise.all([
     k8sGet('/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity'),
     k8sGet(`/apis/apps/v1/namespaces/${FND_NS}/deployments/${SAMBA}`),
     k8sGet(`/apis/apps/v1/namespaces/${FND_NS}/deployments/${KEYCLOAK}`),
@@ -214,6 +276,11 @@ async function sambaPayload() {
     k8sGet(`/api/v1/namespaces/${FND_NS}/events?fieldSelector=${fsel}&limit=15`),
     k8sGet('/apis/storage.k8s.io/v1/storageclasses'),
     k8sGet(`/api/v1/namespaces/${FND_NS}/secrets/${SAMBA_CREDS_SECRET}`),
+    k8sGet(`/apis/apps/v1/namespaces/${CROSSPLANE_NS}/deployments/crossplane`),
+    k8sGet(`/apis/apps/v1/namespaces/${CROSSPLANE_NS}/deployments/crossplane-rbac-manager`),
+    k8sGet('/apis/pkg.crossplane.io/v1/providers'),
+    k8sGet('/apis/apiextensions.k8s.io/v1/customresourcedefinitions/identitydirectoryclaims.foundation.opensphere.io'),
+    k8sGet('/apis/apiextensions.k8s.io/v1/customresourcedefinitions/identitydirectorybindings.foundation.opensphere.io'),
   ]);
   // 설정 폼 StorageClass 드롭다운 — 클러스터 실 목록(기본 SC 표시). 조회 실패 시 빈 배열(폼은 현재값만).
   const storageClasses = scList.__status ? [] : (scList.items || []).map((s) => ({
@@ -237,9 +304,13 @@ async function sambaPayload() {
   const sp = (!fm.__status && fm.spec?.parameters?.samba) || {};
   const config = {
     domain: sp.domain || SAMBA_DEFAULTS.domain,
+    domainSource: valueSource(sp, 'domain'),
     replicas: Number.isInteger(sp.replicas) ? sp.replicas : SAMBA_DEFAULTS.replicas,
+    replicasSource: valueSource(sp, 'replicas'),
     storageClass: sp.storageClass || SAMBA_DEFAULTS.storageClass,
+    storageClassSource: valueSource(sp, 'storageClass'),
     dnsForwarder: sp.dnsForwarder || SAMBA_DEFAULTS.dnsForwarder,
+    dnsForwarderSource: valueSource(sp, 'dnsForwarder'),
   };
   // 백업 설정 정본 = FM/identity.spec.parameters.samba.backup. mode=shared(공용 기본 BSL) | dedicated(전용 BSL).
   // 실 Schedule/Backup(velero.io, ns velero)은 UI가 foundation 프록시(사용자 임퍼소네이션)로 읽고 쓴다 —
@@ -265,6 +336,7 @@ async function sambaPayload() {
     bootstrapSecret: { name: SAMBA_CREDS_SECRET, key: SAMBA_CREDS_KEY, found: !secret.__status, status: secret.__status || 200 },
     backup,
     storageClasses,
+    crossplane: crossplaneView(xpCore, xpRbac, xpProviders, idClaimCrd, idBindingCrd),
     workload: workloadView(dep, pods),
     keycloak: kcDep.__status ? { found: false } : { found: true, ready: (kcDep.status?.readyReplicas ?? 0) >= 1, name: KEYCLOAK },
     events: evs,
