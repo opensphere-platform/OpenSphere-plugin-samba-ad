@@ -307,4 +307,51 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => console.log(`opensphere-plugin-samba-ad v${VERSION} listening :${PORT}`));
+// ── 메시지 통합(2026-07-06) — plugin이 자기 이벤트를 콘솔 단일 인박스(audit bus)에 발행 ──
+// S2 배선: dupa-registry-controller /api/admin/events(X-Shell-Token=SHELL_SERVICE_TOKEN, podEnv 주입).
+// 전이 시에만 발행(dedup — 폴링 스팸 금지). source는 controller가 'ext:'로 강제 태깅(actor 위장 불가).
+// best-effort: 발행 실패해도 plugin 본기능 무관(경고 1회 후 억제).
+const CONTROLLER = process.env.OSP_CONTROLLER || 'http://dupa-registry-controller.opensphere-system.svc.cluster.local:8080';
+const SHELL_TOKEN = process.env.SHELL_SERVICE_TOKEN || '';
+let _notifyWarned = false;
+async function publishNotify(ev) {
+  if (!SHELL_TOKEN) { if (!_notifyWarned) { _notifyWarned = true; console.warn('[notify] SHELL_SERVICE_TOKEN 없음 — 이벤트 발행 생략'); } return; }
+  try {
+    const res = await fetch(`${CONTROLLER}/api/admin/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-shell-token': SHELL_TOKEN, 'x-opensphere-source': 'samba-ad' },
+      body: JSON.stringify({ source: 'samba-ad', ...ev }),
+    });
+    if (!res.ok && !_notifyWarned) { _notifyWarned = true; console.warn(`[notify] 발행 실패 http=${res.status}(이후 억제)`); }
+  } catch (e) { if (!_notifyWarned) { _notifyWarned = true; console.warn(`[notify] 발행 실패 ${(e && (e.code || e.message)) || e}(이후 억제)`); } }
+}
+
+// 자기 헬스 전이 감시 — DC ready / LDAP reachable 상태가 바뀔 때만 발행(기준선은 첫 관측서 수립).
+let _lastHealth = null;
+async function healthTransitionPublish() {
+  try {
+    const p = await sambaPayload();
+    const w = p.workload || {};
+    const ldap = await tcpProbe(`${SAMBA}.${FND_NS}.svc`, 389).catch(() => false);
+    const cur = { dcReady: !!w.ready, ldap };
+    const prev = _lastHealth;
+    _lastHealth = cur;
+    if (prev === null) { return; } // 첫 관측 = 기준선(재기동 스팸 방지)
+    if (prev.dcReady !== cur.dcReady) {
+      await publishNotify({ action: cur.dcReady ? 'DirectoryReady' : 'DirectoryDown', target: `Deployment/${SAMBA}`,
+        result: cur.dcReady ? 'success' : 'warning', reason: `Samba-AD DC ${cur.dcReady ? 'Running' : '비정상(디렉터리 다운)'}` });
+    }
+    if (prev.ldap !== cur.ldap) {
+      await publishNotify({ action: cur.ldap ? 'LdapReachable' : 'LdapUnreachable', target: `Service/${SAMBA}:389`,
+        result: cur.ldap ? 'info' : 'warning', reason: `Samba-AD LDAP :389 ${cur.ldap ? '도달' : '도달 불가(federation 영향)'}` });
+    }
+  } catch (e) { /* best-effort */ }
+}
+
+server.listen(PORT, () => {
+  console.log(`opensphere-plugin-samba-ad v${VERSION} listening :${PORT}`);
+  // 시작 이벤트 발행 + 60초 헬스 전이 감시(첫 호출=기준선, 발행 없음).
+  publishNotify({ action: 'started', target: 'samba-ad', result: 'info', reason: `Samba-AD plugin v${VERSION} 시작` });
+  healthTransitionPublish();
+  setInterval(healthTransitionPublish, 60000);
+});
