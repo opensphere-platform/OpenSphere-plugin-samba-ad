@@ -10,6 +10,7 @@
   "entrySha256": "074d31207f23984742ab81de2f2c8296e3ce4dd89d588a001a3e0b4a34a9601c",
   "shellCompat": ">=0.2.0 <0.9.0",
   "permissions": [
+    "page:register",
     "api:proxy",
     "manual:contribute"
   ],

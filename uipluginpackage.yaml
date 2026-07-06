@@ -16,19 +16,21 @@ spec:
   serviceAccountName: opensphere-plugin-samba-ad   # rbac.yaml — 전용 SA 최소권한(읽기)
   image:
     repository: ghcr.io/opensphere-platform/plugin-samba-ad
-    digest: sha256:b9696529502ef5a74c19aa820cf7c9b928f5eb1bc01f904710c0776814736359  # preflight page/API/manual
+    digest: sha256:23d09a533e2c31b8a91db21147733ca132b35896dd62204749f915367b8185a2  # preflight page/API/manual + extension-host load permission
   nav:
     band: "운영 Operate"
     label: "Samba-AD"
   manifest:
     path: /plugins/ui-shell.manifest.json
-    sha256: "6b43417d5dedd608e949f382eb5099cfe5a6473c5854f520d32486c2effe8d44"
+    sha256: "481fa82ebdef973fce133a622b2be0f60889046cb32c9c74ed9490f777367dde"
     signaturePath: /plugins/ui-shell.manifest.json.sig
   trust:
     keyId: opensphere-plugins-v2
   shellCompat: ">=0.2.0 <0.9.0"
-  # 감사 Medium 시정: registerPage 미호출(sub-hosted)이므로 page:register 제거 — 미사용 권한 회수(최소권한).
+  # Extension Host는 page:register 권한이 있어야 plugin activate를 수행한다.
+  # exposeInNavigation=false + registerPage 미호출로 mainShell 1단 노출은 막고, Foundation 안층 mount만 허용한다.
   permissions:
+    - page:register
     - api:proxy
     - manual:contribute
   api:
