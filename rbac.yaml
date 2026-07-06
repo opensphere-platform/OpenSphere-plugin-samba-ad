@@ -6,7 +6,7 @@ metadata:
   name: opensphere-plugin-samba-ad
   namespace: opensphere-system
 ---
-# FoundationModel(cluster-scope) 읽기 — identity 모델 phase/observed/좌표.
+# 클러스터 스코프 읽기 — FoundationModel(identity 모델) + StorageClass(설정 폼 드롭다운 목록).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata: { name: opensphere-plugin-samba-ad-fm-reader }
@@ -14,6 +14,10 @@ rules:
   - apiGroups: ["foundation.opensphere.io"]
     resources: [foundationmodels]
     verbs: [get]
+  # 설정 폼의 StorageClass 드롭다운 — 클러스터 실 StorageClass 목록(읽기만).
+  - apiGroups: ["storage.k8s.io"]
+    resources: [storageclasses]
+    verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

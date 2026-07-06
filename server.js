@@ -117,13 +117,20 @@ function workloadView(dep, pods) {
 async function sambaPayload() {
   const sel = encodeURIComponent(`app=${SAMBA}`);
   const fsel = encodeURIComponent(`involvedObject.name=${SAMBA}`);
-  const [fm, dep, kcDep, pods, events] = await Promise.all([
+  const [fm, dep, kcDep, pods, events, scList] = await Promise.all([
     k8sGet('/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity'),
     k8sGet(`/apis/apps/v1/namespaces/${FND_NS}/deployments/${SAMBA}`),
     k8sGet(`/apis/apps/v1/namespaces/${FND_NS}/deployments/${KEYCLOAK}`),
     k8sGet(`/api/v1/namespaces/${FND_NS}/pods?labelSelector=${sel}`),
     k8sGet(`/api/v1/namespaces/${FND_NS}/events?fieldSelector=${fsel}&limit=15`),
+    k8sGet('/apis/storage.k8s.io/v1/storageclasses'),
   ]);
+  // 설정 폼 StorageClass 드롭다운 — 클러스터 실 목록(기본 SC 표시). 조회 실패 시 빈 배열(폼은 현재값만).
+  const storageClasses = scList.__status ? [] : (scList.items || []).map((s) => ({
+    name: s.metadata?.name,
+    provisioner: s.provisioner,
+    isDefault: (s.metadata?.annotations || {})['storageclass.kubernetes.io/is-default-class'] === 'true',
+  }));
   const model = fm.__status
     ? { found: false, status: fm.__status }
     : {
@@ -151,6 +158,7 @@ async function sambaPayload() {
     meta: { service: 'opensphere-plugin-samba-ad', version: VERSION, servedBy: process.env.HOSTNAME || 'unknown', time: new Date().toISOString(), ns: FND_NS },
     model,
     config,
+    storageClasses,
     workload: workloadView(dep, pods),
     keycloak: kcDep.__status ? { found: false } : { found: true, ready: (kcDep.status?.readyReplicas ?? 0) >= 1, name: KEYCLOAK },
     events: evs,

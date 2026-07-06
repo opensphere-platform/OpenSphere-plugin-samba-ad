@@ -135,6 +135,19 @@ class SambaAdElement extends HTMLElement {
     } catch (e) { if (status) status.textContent = `저장 실패: ${esc(e)}`; }
   }
 
+  // StorageClass 드롭다운 — 클러스터 실 목록(기본 SC 표시). 목록 조회 실패 시 현재값만 담은 select로 폴백.
+  _scSelect(d) {
+    const cur = (d.config || {}).storageClass || '';
+    const list = (d.storageClasses || []);
+    const names = list.map((s) => s.name);
+    const opts = (names.length ? names : (cur ? [cur] : [])).map((n) => {
+      const sc = list.find((s) => s.name === n);
+      const label = n + (sc && sc.isDefault ? ' (default)' : '');
+      return `<option value="${esc(n)}"${n === cur ? ' selected' : ''}>${esc(label)}</option>`;
+    }).join('');
+    return `<select id="sc-cfg-sc" class="clr-select" style="width:100%">${opts || `<option value="${esc(cur)}" selected>${esc(cur || '—')}</option>`}</select>`;
+  }
+
   kv(pairs) { return pairs.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join(''); }
   card(title, bodyHtml) {
     return `<div class="clr-col-12 clr-col-lg-6"><div class="card">
@@ -204,7 +217,7 @@ class SambaAdElement extends HTMLElement {
       <div class="card"><div class="card-block"><div class="clr-row">
         <div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><label class="os-sub">도메인(realm)<input id="sc-cfg-domain" class="clr-input" style="width:100%" value="${esc((d.config || {}).domain)}"></label></div>
         <div class="clr-col-12 clr-col-md-6 clr-col-lg-2"><label class="os-sub">replicas<input id="sc-cfg-replicas" class="clr-input" type="number" min="1" style="width:100%" value="${esc((d.config || {}).replicas)}"></label></div>
-        <div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><label class="os-sub">StorageClass<input id="sc-cfg-sc" class="clr-input" style="width:100%" value="${esc((d.config || {}).storageClass)}"></label></div>
+        <div class="clr-col-12 clr-col-md-6 clr-col-lg-3"><label class="os-sub">StorageClass${this._scSelect(d)}</label></div>
         <div class="clr-col-12 clr-col-md-6 clr-col-lg-2"><label class="os-sub">DNS forwarder<input id="sc-cfg-dns" class="clr-input" style="width:100%" value="${esc((d.config || {}).dnsForwarder)}"></label></div>
         <div class="clr-col-12 clr-col-lg-2" style="display:flex;align-items:flex-end"><button id="sc-cfg-save" class="btn btn-primary btn-sm">적용</button></div>
       </div><p id="sc-cfg-status" class="os-sub"></p>
