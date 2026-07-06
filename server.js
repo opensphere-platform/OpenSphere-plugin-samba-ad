@@ -17,6 +17,77 @@ const APISERVER = 'https://kubernetes.default.svc';
 const FND_NS = process.env.FOUNDATION_NS || 'opensphere-foundation';
 const SAMBA = 'foundation-identity-samba';
 const KEYCLOAK = 'foundation-identity-keycloak';
+// self-contained(2026-07-06): operand(AD DC 실물) 배포 선언을 이 plugin이 소유한다.
+// control-plane은 GET /operand/manifests로 이 선언을 받아 SSA apply만 한다("내민 선언을 apply").
+const SAMBA_IMAGE = process.env.SAMBA_IMAGE || 'ghcr.io/opensphere-platform/mirror/samba-domain:20260706';
+const SAMBA_DATA_PVC = 'foundation-identity-samba-data';
+
+// 설정 정본 = FoundationModel/identity.spec.parameters.samba (없으면 dev 기본값).
+// 3단계 설정 페이지가 이 필드를 PATCH하면 control-plane 재조정 시 operand가 재렌더된다.
+const SAMBA_DEFAULTS = { domain: 'OPENSPHERE.LOCAL', domainPass: 'OpenSphere2026!', replicas: 1, storageClass: 'standard', dnsForwarder: '8.8.8.8' };
+async function readSambaConfig() {
+  const fm = await k8sGet('/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity');
+  const p = (!fm.__status && fm.spec?.parameters?.samba) || {};
+  return {
+    domain: p.domain || SAMBA_DEFAULTS.domain,
+    domainPass: p.domainPass || SAMBA_DEFAULTS.domainPass,
+    replicas: Number.isInteger(p.replicas) ? p.replicas : SAMBA_DEFAULTS.replicas,
+    storageClass: p.storageClass || SAMBA_DEFAULTS.storageClass,
+    dnsForwarder: p.dnsForwarder || SAMBA_DEFAULTS.dnsForwarder,
+  };
+}
+
+// buildOperand — Samba-AD DC operand 선언(k8s 오브젝트 JSON 배열). control-plane이 라벨 스탬프 후 SSA.
+// PVC는 회수 대상에서 제외(SAM DB 보존) — control-plane bundleKinds 정책과 정합.
+function buildOperand(cfg) {
+  const meta = (name) => ({ name, namespace: FND_NS });
+  return [
+    { apiVersion: 'v1', kind: 'PersistentVolumeClaim', metadata: meta(SAMBA_DATA_PVC),
+      spec: { accessModes: ['ReadWriteOnce'], storageClassName: cfg.storageClass, resources: { requests: { storage: '3Gi' } } } },
+    { apiVersion: 'v1', kind: 'Service', metadata: meta(SAMBA),
+      spec: { selector: { app: SAMBA }, ports: [
+        { name: 'ldap', port: 389, targetPort: 389, protocol: 'TCP' },
+        { name: 'ldaps', port: 636, targetPort: 636, protocol: 'TCP' },
+        { name: 'kerberos', port: 88, targetPort: 88, protocol: 'TCP' },
+        { name: 'dns-tcp', port: 53, targetPort: 53, protocol: 'TCP' },
+        { name: 'dns-udp', port: 53, targetPort: 53, protocol: 'UDP' },
+        { name: 'smb', port: 445, targetPort: 445, protocol: 'TCP' },
+      ] } },
+    { apiVersion: 'apps/v1', kind: 'Deployment', metadata: meta(SAMBA),
+      spec: { replicas: cfg.replicas, strategy: { type: 'Recreate' }, selector: { matchLabels: { app: SAMBA } },
+        template: { metadata: { labels: { app: SAMBA } },
+          spec: { hostname: 'dc1', automountServiceAccountToken: false,
+            containers: [{ name: 'samba', image: SAMBA_IMAGE, imagePullPolicy: 'IfNotPresent',
+              securityContext: { privileged: true },
+              env: [
+                { name: 'DOMAIN', value: cfg.domain },
+                { name: 'DOMAINPASS', value: cfg.domainPass },
+                { name: 'HOSTIP', valueFrom: { fieldRef: { fieldPath: 'status.podIP' } } },
+                { name: 'DNSFORWARDER', value: cfg.dnsForwarder },
+                { name: 'NOCOMPLEXITY', value: 'true' },
+                { name: 'INSECURELDAP', value: 'true' },
+                { name: 'JOIN', value: 'false' },
+              ],
+              ports: [
+                { name: 'ldap', containerPort: 389 }, { name: 'ldaps', containerPort: 636 },
+                { name: 'kerberos', containerPort: 88 }, { name: 'dns', containerPort: 53 },
+                { name: 'smb', containerPort: 445 },
+              ],
+              readinessProbe: { tcpSocket: { port: 389 }, initialDelaySeconds: 25, periodSeconds: 10, failureThreshold: 30 },
+              resources: { requests: { cpu: '150m', memory: '384Mi' }, limits: { memory: '768Mi' } },
+              volumeMounts: [
+                { name: 'data', mountPath: '/var/lib/samba', subPath: 'lib' },
+                { name: 'data', mountPath: '/etc/samba/external', subPath: 'etc-external' },
+              ] }],
+            volumes: [{ name: 'data', persistentVolumeClaim: { claimName: SAMBA_DATA_PVC } }] } } } },
+    { apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', metadata: meta(SAMBA),
+      spec: { podSelector: { matchLabels: { app: SAMBA } }, policyTypes: ['Ingress'],
+        ingress: [{ ports: [
+          { protocol: 'TCP', port: 389 }, { protocol: 'TCP', port: 636 }, { protocol: 'TCP', port: 88 },
+          { protocol: 'TCP', port: 53 }, { protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 445 },
+        ] }] } },
+  ];
+}
 
 function saToken() { return fs.readFileSync(`${SA}/token`, 'utf8').trim(); }
 
@@ -103,6 +174,12 @@ const server = http.createServer(async (req, res) => {
       const payload = await sambaPayload();
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(payload));
+    }
+    // ── operand 선언(self-contained) — control-plane이 fetch해 SSA apply ──
+    if (url.pathname === '/operand/manifests') {
+      const cfg = await readSambaConfig();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ engine: 'samba', config: cfg, items: buildOperand(cfg) }));
     }
     // ── os CLI 표면 ──
     if (url.pathname === '/cli/manifest') {
