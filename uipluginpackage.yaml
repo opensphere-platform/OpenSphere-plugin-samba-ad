@@ -33,6 +33,11 @@ spec:
     - manual:contribute
   api:
     basePath: /api/plugins/samba-ad
+  # cli:contribute(2026-07-06) — os CLI에 'ad' 명령 네임스페이스 기여(headless binding).
+  #   registry가 광고 → os가 <console>/api/plugins/samba-ad/cli/manifest 조회 → os ad status/describe/events.
+  cli:
+    namespace: ad
+    manifestPath: /cli/manifest
 ---
 apiVersion: plugins.opensphere.io/v1alpha1
 kind: UIPluginRegistration

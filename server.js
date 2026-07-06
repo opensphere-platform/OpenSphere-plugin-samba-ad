@@ -76,6 +76,25 @@ async function sambaPayload() {
   };
 }
 
+// ── cli:contribute (2026-07-06) — os CLI 명령 기여(headless binding). os가 registry에서 namespace 'ad'를
+//   발견해 <console>/api/plugins/samba-ad<manifestPath>의 이 manifest를 조회, os ai와 동일 엔진으로 디스패치.
+//   command manifest 스키마 = OAHAgentToolManifest 호환(kind/cli.commandPrefix/tools[]) — os 재사용.
+//   현재 명령은 전부 읽기(risk=low) — 디렉터리 내용 변경은 ADR-FND-001상 콘솔/CLI가 하지 않는다(samba-tool).
+function cliManifest() {
+  const tool = (id, verb, path, description) => ({
+    id, command: `os ad ${verb}`, method: 'GET', path, params: [], risk: 'low', scope: 'read', description,
+  });
+  return {
+    kind: 'OpenSphereCLICommandManifest',
+    cli: { commandPrefix: 'os ad' },
+    tools: [
+      tool('ad.status', 'status', '/cli/status', 'Samba-AD 디렉터리 요약(phase·realm·LDAP·모델 신호)'),
+      tool('ad.describe', 'describe', '/cli/describe', '전체 상세(실물·연결·모델·소비자·이벤트) JSON'),
+      tool('ad.events', 'events', '/cli/events', '최근 K8s 운영 이벤트'),
+    ],
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
@@ -84,6 +103,32 @@ const server = http.createServer(async (req, res) => {
       const payload = await sambaPayload();
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(payload));
+    }
+    // ── os CLI 표면 ──
+    if (url.pathname === '/cli/manifest') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify(cliManifest()));
+    }
+    if (url.pathname === '/cli/describe') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify(await sambaPayload()));
+    }
+    if (url.pathname === '/cli/events') {
+      const p = await sambaPayload();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ events: p.events }));
+    }
+    if (url.pathname === '/cli/status') {
+      const p = await sambaPayload();
+      const w = p.workload || {}, m = p.model || {};
+      const up = (p.model?.observed || []).filter((o) => o.id && o.id.endsWith('_up')).reduce((a, o) => (a[o.id] = o.value, a), {});
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        plugin: 'samba-ad', phase: w.found ? (w.ready ? 'Running' : 'Pending') : 'NotDeployed',
+        replicas: w.found ? `${w.readyReplicas}/${w.replicas}` : '0/0',
+        realm: w.realmEnv || m.directoryRealm || '', ldap: m.ldapURL || '',
+        modelPhase: m.phase || '', engines: up, engineOpt: m.engineOpt || 'enabled',
+      }));
     }
     if (url.pathname === '/plugins' || url.pathname === '/plugins/') {
       const files = fs.existsSync(PLUGIN_DIR) ? fs.readdirSync(PLUGIN_DIR).filter((f) => !f.startsWith('.')) : [];
