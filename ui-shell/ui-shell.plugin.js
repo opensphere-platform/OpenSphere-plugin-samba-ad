@@ -323,6 +323,43 @@ class SambaAdElement extends HTMLElement {
     return `<select id="sc-cfg-sc" class="os-filter">${opts || `<option value="${esc(cur)}" selected>${esc(cur || '—')}</option>`}</select>`;
   }
 
+  preflight(d) {
+    const pf = d.preflight || { checks: [], installState: 'Unknown', blockers: 0, warnings: 0 };
+    const cls = (state) => ({
+      pass: 'label-success',
+      warn: 'label-warning',
+      fail: 'label-danger',
+      info: 'label-info',
+    }[state] || '');
+    const label = (state) => ({
+      pass: 'PASS',
+      warn: 'WARN',
+      fail: 'BLOCK',
+      info: 'INFO',
+    }[state] || esc(state));
+    const rows = (pf.checks || []).map((c) => `
+      <tr>
+        <td>${esc(c.label)}</td>
+        <td><span class="label ${cls(c.state)}">${label(c.state)}</span></td>
+        <td>${esc(c.message)}</td>
+      </tr>`).join('');
+    const banner = pf.installState === 'ReadyToApply'
+      ? '<div class="alert alert-success"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Preflight passed. Foundation control-plane can apply /operand/manifests to deploy the Samba-AD operand.</span></div></div></div>'
+      : pf.installState === 'Blocked'
+        ? '<div class="alert alert-danger"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Preflight is blocked. Resolve BLOCK items before operand deployment.</span></div></div></div>'
+        : pf.installState === 'Deploying'
+          ? '<div class="alert alert-warning"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Samba-AD operand exists but is still converging. Continue watching workload, events, metrics, and logs below.</span></div></div></div>'
+          : '<div class="alert alert-info"><div class="alert-items"><div class="alert-item static"><span class="alert-text">Samba-AD operand is installed. This preflight section remains as the operational baseline for drift and prerequisite checks.</span></div></div></div>';
+    return `
+      <div class="os-sech">Preflight <span class="os-sub">Samba-AD operand day-0 readiness</span></div>
+      <div class="card"><div class="card-block">
+        ${banner}
+        <table class="table"><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="3">No preflight checks returned.</td></tr>'}</tbody></table>
+        <p class="os-sub">state=${esc(pf.installState)} · blockers=${esc(pf.blockers)} · warnings=${esc(pf.warnings)} · mode=${esc(pf.mode || 'unknown')}</p>
+      </div></div>`;
+  }
+
   kv(pairs) { return pairs.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join(''); }
   card(title, bodyHtml) {
     return `<div class="clr-col-12 clr-col-lg-6"><div class="card">
@@ -362,6 +399,7 @@ class SambaAdElement extends HTMLElement {
       <p class="os-sub">workspace/사원 디렉터리 · Samba Active Directory DC · realm ${esc(realm)} · ns ${esc(d.meta?.ns)}
         · <strong>독립 서명 plugin(OpenSphere-plugin-samba-ad) — 기능 컨테이너 ${esc(d.meta?.servedBy)}가 서빙, Foundation(host)이 안층 마운트</strong></p>
       ${notDeployed}
+      ${this.preflight(d)}
       <div class="clr-row">
         ${this.card(`디렉터리 실물 <span class="os-mono">${esc('foundation-identity-samba')}</span>`, `
           <table class="table"><tbody>${this.kv([
@@ -469,6 +507,13 @@ const MANUAL_DOCS = [
       '- `DOMAINPASS`는 평문 env가 아니라 **Foundation 소유 Secret**(`foundation-identity-samba-creds`)을 `secretKeyRef`로 받는다 — 비밀번호는 소스/manifest/응답에 노출되지 않는다(secret 권위=Foundation).',
       '- 스토리지: PVC 3Gi — StorageClass는 `FoundationModel.spec.parameters.hostRequirements.storageClass`로 오버라이드(기본 standard).',
       '- 단일 DC(replicas 1, Recreate) — pod IP 변경 시 DNS 자기등록 특성의 dev 수용.',
+      '',
+      '## Preflight',
+      '- Preflight는 plugin 이미지 배포 전 점검이 아니라, plugin 컨테이너가 뜬 뒤 Samba-AD operand 배포 전에 수행하는 day-0 점검이다.',
+      '- UI 상단 Preflight 섹션과 `os ad preflight`가 같은 판정 모델을 사용한다.',
+      '- BLOCK 항목이 0개이면 control-plane은 `/operand/manifests`를 SSA apply하여 PVC/Service/Deployment/NetworkPolicy를 배포할 수 있다.',
+      '- 이미 operand가 설치된 경우 Preflight는 `Installed/manage` 모드로 남아 FoundationModel, engines.samba, StorageClass, realm, Keycloak, workload drift를 계속 확인한다.',
+      '- dev/bootstrap 보안 프로필(`privileged`, `INSECURELDAP`, `NOCOMPLEXITY`)은 WARN으로 유지한다. production hardening은 별도 단계에서 제거해야 한다.',
       '',
       '## 백업(Velero 중앙 등록)',
       '- 백업 엔진은 Velero(BSS). 백업 대상은 외부 S3 호환 서비스이며 사용자가 구성한다 — 클러스터 내부 저장소에 의존하지 않는다.',

@@ -139,6 +139,61 @@ function workloadView(dep, pods) {
   };
 }
 
+function sambaPreflight(payload) {
+  const w = payload.workload || {};
+  const m = payload.model || {};
+  const cfg = payload.config || {};
+  const storageClasses = payload.storageClasses || [];
+  const domain = String(cfg.domain || '');
+  const replicas = Number(cfg.replicas || 0);
+  const hasStorageClassCatalog = storageClasses.length > 0;
+  const selectedStorageClass = String(cfg.storageClass || '');
+  const storageClassKnown = hasStorageClassCatalog
+    ? storageClasses.some((sc) => sc.name === selectedStorageClass)
+    : !!selectedStorageClass;
+  const domainOk = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(domain);
+  const dnsOk = !!String(cfg.dnsForwarder || '').trim();
+  const engineEnabled = m.engineOpt !== 'disabled';
+  const check = (id, label, state, message) => ({ id, label, state, message });
+  const checks = [
+    check('plugin-api', 'Plugin API', 'pass', `Samba-AD plugin backend is reachable (${payload.meta?.servedBy || 'unknown'}).`),
+    check('foundation-model', 'FoundationModel/identity', m.found ? 'pass' : 'fail',
+      m.found ? `model phase=${m.phase || 'unknown'}` : `FoundationModel/identity is not readable (HTTP ${m.status || 'unknown'}).`),
+    check('engine-option', 'engines.samba', engineEnabled ? 'pass' : 'fail',
+      engineEnabled ? `engine option=${m.engineOpt || 'enabled'}` : 'engine option is disabled; enable Samba-AD from Foundation Plugins before applying the operand.'),
+    check('domain-realm', 'Directory realm', domainOk ? 'pass' : 'fail',
+      domainOk ? `realm=${domain}` : 'realm must be an FQDN-like value such as OPENSPHERE.LOCAL.'),
+    check('storage-class', 'StorageClass', storageClassKnown ? 'pass' : (selectedStorageClass ? 'warn' : 'fail'),
+      hasStorageClassCatalog
+        ? (storageClassKnown ? `selected=${selectedStorageClass}` : `selected=${selectedStorageClass}; not found in cluster StorageClass catalog.`)
+        : `selected=${selectedStorageClass || '(empty)'}; StorageClass catalog is not available to this plugin.`),
+    check('dns-forwarder', 'DNS forwarder', dnsOk ? 'pass' : 'fail',
+      dnsOk ? `dnsForwarder=${cfg.dnsForwarder}` : 'dnsForwarder is empty.'),
+    check('replica-mode', 'Replica mode', replicas === 1 ? 'pass' : 'warn',
+      replicas === 1 ? 'single DC/Recreate mode' : `replicas=${replicas}; current Samba-AD operand is designed for single DC mode.`),
+    check('domain-secret', 'Domain password Secret', 'info',
+      `${SAMBA_CREDS_SECRET}/${SAMBA_CREDS_KEY} is referenced by secretKeyRef; value is intentionally not exposed by the plugin.`),
+    check('operand-render', 'Operand manifest', 'pass',
+      `/operand/manifests renders PVC, Service, Deployment, and NetworkPolicy for ${SAMBA}.`),
+    check('security-profile', 'Security profile', 'warn',
+      'Current operand profile is dev/bootstrap: privileged container, INSECURELDAP=true, NOCOMPLEXITY=true. Production hardening remains required.'),
+    check('keycloak', 'Keycloak federation consumer', payload.keycloak?.ready ? 'pass' : 'warn',
+      payload.keycloak?.found ? (payload.keycloak.ready ? 'Keycloak deployment is ready.' : 'Keycloak deployment exists but is not ready yet.') : 'Keycloak deployment was not found.'),
+    check('workload', 'Samba-AD workload', w.found ? (w.ready ? 'pass' : 'warn') : 'info',
+      w.found ? `deployment exists; ready=${w.readyReplicas || 0}/${w.replicas || 0}` : 'workload is not deployed yet; this is expected during day-0 preflight.'),
+  ];
+  const blockers = checks.filter((c) => c.state === 'fail').length;
+  const warnings = checks.filter((c) => c.state === 'warn').length;
+  return {
+    mode: w.found ? 'manage' : 'preflight',
+    readyToInstall: blockers === 0 && !w.found,
+    installState: w.found ? (w.ready ? 'Installed' : 'Deploying') : (blockers === 0 ? 'ReadyToApply' : 'Blocked'),
+    blockers,
+    warnings,
+    checks,
+  };
+}
+
 async function sambaPayload() {
   const sel = encodeURIComponent(`app=${SAMBA}`);
   const fsel = encodeURIComponent(`involvedObject.name=${SAMBA}`);
@@ -193,7 +248,7 @@ async function sambaPayload() {
   const evs = (events.items || [])
     .map((e) => ({ type: e.type, reason: e.reason, message: e.message, time: e.lastTimestamp || e.eventTime || '' }))
     .sort((a, b) => String(b.time).localeCompare(String(a.time)));
-  return {
+  const payload = {
     meta: { service: 'opensphere-plugin-samba-ad', version: VERSION, servedBy: process.env.HOSTNAME || 'unknown', time: new Date().toISOString(), ns: FND_NS },
     model,
     config,
@@ -203,6 +258,8 @@ async function sambaPayload() {
     keycloak: kcDep.__status ? { found: false } : { found: true, ready: (kcDep.status?.readyReplicas ?? 0) >= 1, name: KEYCLOAK },
     events: evs,
   };
+  payload.preflight = sambaPreflight(payload);
+  return payload;
 }
 
 // ── cli:contribute (2026-07-06) — os CLI 명령 기여(headless binding). os가 registry에서 namespace 'ad'를
@@ -217,6 +274,7 @@ function cliManifest() {
     kind: 'OpenSphereCLICommandManifest',
     cli: { commandPrefix: 'os ad' },
     tools: [
+      tool('ad.preflight', 'preflight', '/cli/preflight', 'Samba-AD operand day-0 preflight checks'),
       tool('ad.status', 'status', '/cli/status', 'Samba-AD 디렉터리 요약(phase·realm·LDAP·모델 신호)'),
       tool('ad.describe', 'describe', '/cli/describe', '전체 상세(실물·연결·모델·소비자·이벤트) JSON'),
       tool('ad.events', 'events', '/cli/events', '최근 K8s 운영 이벤트'),
@@ -314,6 +372,11 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(payload));
     }
+    if (url.pathname === '/api/preflight') {
+      const payload = await sambaPayload();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify(payload.preflight));
+    }
     // ── operand 선언(self-contained) — control-plane이 fetch해 SSA apply ──
     if (url.pathname === '/operand/manifests') {
       const cfg = await readSambaConfig();
@@ -328,6 +391,11 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/cli/describe') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(await sambaPayload()));
+    }
+    if (url.pathname === '/cli/preflight') {
+      const p = await sambaPayload();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify(p.preflight));
     }
     if (url.pathname === '/cli/events') {
       const p = await sambaPayload();
