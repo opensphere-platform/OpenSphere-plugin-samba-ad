@@ -217,6 +217,18 @@ async function metricsText() {
     g('samba_ad_keycloak_federation_up', 'Keycloak(federation 소비자) ready', p.keycloak && p.keycloak.ready ? 1 : 0),
   ].join('');
 }
+// ── Loki 로그 통합(2026-07-06) — 중앙 로그 스택(basic observability) 소비 ──
+// promtail이 samba pod stdout을 Loki에 수집 → 이 endpoint가 LogQL query_range로 tail.
+const LOKI = process.env.LOKI_URL || 'http://loki.monitoring.svc:3100';
+async function lokiTail(minutes, limit) {
+  const endNs = Date.now() * 1e6;
+  const startNs = (Date.now() - Math.max(1, minutes) * 60000) * 1e6;
+  const q = encodeURIComponent(`{namespace="${FND_NS}",app="${SAMBA}"}`);
+  const u = `${LOKI}/loki/api/v1/query_range?query=${q}&start=${startNs}&end=${endNs}&limit=${limit}&direction=backward`;
+  const r = await fetch(u);
+  if (!r.ok) return { __status: r.status };
+  return r.json();
+}
 async function promRange(query, minutes) {
   const end = Math.floor(Date.now() / 1000);
   const start = end - Math.max(1, minutes) * 60;
@@ -241,6 +253,16 @@ const server = http.createServer(async (req, res) => {
       const out = await promRange(q, minutes);
       res.writeHead(out.__status ? 502 : 200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(out.__status ? { error: `prometheus HTTP ${out.__status}` } : out));
+    }
+    if (url.pathname === '/api/logs') {
+      const minutes = parseInt(url.searchParams.get('minutes') || '60', 10);
+      const out = await lokiTail(minutes, 200);
+      if (out.__status) { res.writeHead(502, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: `loki HTTP ${out.__status} — 로그 스택(Loki) 연결 확인` })); }
+      const lines = [];
+      for (const s of (out.data?.result || [])) for (const [ts, line] of (s.values || [])) lines.push({ ts: Math.floor(Number(ts) / 1e6), line });
+      lines.sort((a, b) => b.ts - a.ts);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ lines: lines.slice(0, 120) }));
     }
     if (url.pathname === '/api/samba') {
       const payload = await sambaPayload();

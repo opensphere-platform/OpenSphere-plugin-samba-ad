@@ -51,10 +51,30 @@ function sparkline(points, w = 280, h = 44, color = '#4c6fff') {
 class SambaAdElement extends HTMLElement {
   connectedCallback() {
     this.innerHTML = '<p class="os-sub">Samba-AD 불러오는 중… <span class="spinner spinner-inline"></span></p>';
-    this._load().then(() => this._loadCharts());
-    this._timer = setInterval(() => this._load().then(() => this._loadCharts()), 15000);
+    this._load().then(() => { this._loadCharts(); this._loadLogs(); });
+    this._timer = setInterval(() => this._load().then(() => { this._loadCharts(); this._loadLogs(); }), 15000);
   }
   disconnectedCallback() { if (this._timer) { clearInterval(this._timer); this._timer = null; } }
+
+  // Loki 로그 통합 — samba pod stdout tail(자기 /api/logs 프록시 경유). 셸 vl-log 콘솔 박스 재사용(velero 동일).
+  async _loadLogs() {
+    const host = this.querySelector('#sc-logs');
+    if (!host) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/logs?minutes=60`, { cache: 'no-store' });
+      if (!res.ok) {
+        const t = await res.json().catch(() => ({}));
+        host.innerHTML = `<div class="vl-log-empty">${esc(t.error || `로그 조회 실패 HTTP ${res.status}`)}</div>`;
+        return;
+      }
+      const lines = (await res.json()).lines || [];
+      host.innerHTML = lines.length
+        ? lines.map((l) => `<div class="vl-log-line">${esc(new Date(l.ts).toLocaleTimeString())}  ${esc(l.line)}</div>`).join('')
+        : '<div class="vl-log-empty">최근 60분 로그 없음 — promtail 수집/Loki 연결을 확인하세요.</div>';
+    } catch (e) {
+      host.innerHTML = `<div class="vl-log-empty">로그 조회 실패: ${esc(e)}</div>`;
+    }
+  }
 
   // kube-prometheus-stack 시계열 → 스파크라인(자기 /api/metrics/range 프록시 경유).
   async _loadCharts() {
@@ -224,6 +244,8 @@ class SambaAdElement extends HTMLElement {
       <p class="os-sub">⚠️ 도메인/replicas 변경은 control-plane 재조정 시 operand 재렌더 → pod 재기동을 유발합니다(PVC=SAM DB는 보존). 사용자·그룹은 samba-tool.</p>
       </div></div>
       <div id="sc-metrics"><div class="os-sech">메트릭 <span class="os-sub">kube-prometheus-stack</span></div><p class="os-sub">차트 로딩…</p></div>
+      <div class="os-sech">로그 <span class="os-sub">Loki · samba pod stdout · 최근 60분</span></div>
+      <div id="sc-logs" class="vl-log"><div class="vl-log-empty">로그 로딩…</div></div>
       <div class="os-sech">운영 이벤트 <span class="os-sub">K8s events</span></div>
       ${eventRows ? `<table class="table"><thead><tr><th>유형</th><th>사유</th><th>메시지</th><th>시각</th></tr></thead><tbody>${eventRows}</tbody></table>`
         : '<p class="os-sub">최근 이벤트 없음.</p>'}
