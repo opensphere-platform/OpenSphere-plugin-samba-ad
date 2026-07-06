@@ -3,6 +3,9 @@
 workspace/사원 디렉터리(Samba AD DC) 관리 plugin — **D1 승격**(2026-07-06)으로 Foundation subShell 내부 뷰에서
 독립 레포(폴더=컨테이너=신뢰·서명 경계, `OpenSphere-plugin-*` 규약)로 분리된 첫 sub-hosted plugin.
 
+> 📖 **상세 레퍼런스(샘플용) → [`docs/`](docs/README.md)** — 성숙도 평가 · 아키텍처 · 백엔드 · UI · 통합축 · 패키징/서명/배포.
+> 이 plugin은 **다른 plugin 개발의 표준 샘플**로 문서화되어 있다.
+
 ## 구조 계약
 
 | 축 | 내용 |
