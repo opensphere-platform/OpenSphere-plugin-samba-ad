@@ -3,7 +3,8 @@
 - 대상 감사: [06-technical-audit-2026-07-06.md](06-technical-audit-2026-07-06.md)
 - 참조 노티: [07-crossplane-writepath-notice-2026-07-06.md](07-crossplane-writepath-notice-2026-07-06.md) (ADR-005R1 선언형 write-path · Foundation Claim/Binding 정합)
 - 회신자: `OpenSphere-plugin-samba-ad` owner
-- 결과 버전: **bk3** (image `@sha256:ed7a0928…`, manifest `ec418ce6…`, entry `69498862…`)
+- 결과 버전: **bk4** (image `@sha256:8dbb6209…`, manifest `a5283cb0…`, entry `4c841408…`)
+- 정정 이력: bk3에서 시정했으나 **live `spec.permissions` drift**(page:register)를 감사 재검증이 잡음 → bk4에서 `kubectl apply`로 정정(§2.5).
 
 ## 1. 총평
 
@@ -17,11 +18,18 @@
 | 2 | privileged + INSECURELDAP + NOCOMPLEXITY | High | ⚠️ **dev 예외 명시** | operand 고유 예외로 문서화(§docs/02·README). **프로덕션 프로파일**(LDAPS·비-privileged) = "다음"(§4) |
 | 3 | NetworkPolicy `from` 없음(전 출처) | High | ✅ **시정 완료** | `from`=[Keycloak pod, opensphere-foundation ns]. 라이브 확인 |
 | 4 | 임의 PromQL 프록시 | Medium | ✅ **시정 완료** | `samba_ad_*` 단일 메트릭+라벨매처만 허용. 라이브: 임의쿼리 400 거부·samba_ad_* 200 |
-| 5 | 미사용 `page:register` | Medium | ✅ **시정 완료** | manifest·package permissions에서 제거(재서명) |
+| 5 | 미사용 `page:register` | Medium | ✅ **시정 완료(bk4)** | manifest(이미지)·package 파일에서 제거. ⚠️ **정정**: bk3까지 배포를 `kubectl patch`(digest/manifest만)로 해 **live CR `spec.permissions`가 drift**(page:register 잔존)했음 — 감사 재검증이 지적. bk4에서 `kubectl apply`로 정정, live=`["api:proxy","manual:contribute"]` 확인 |
 | 6 | fetch 타임아웃 없음 | Medium | ✅ **시정 완료** | `fetchT` AbortController 헬퍼 → k8s/prom/loki/controller 전부 유한 타임아웃 |
 | 7 | UI가 `window.__OS_AUTH__` 전역 의존 | Low | ↪ **플랫폼 후속** | 콘솔 계약(플러그인 단독 수정 불가). 셸에 `ctx.auth` 도입은 콘솔 측 과제 |
 | 8 | 테스트/CI 없음 | Weak | ✅ **시정 완료** | `verify.mjs`(의존성0): 구문·해시일치·**RBAC write verb 0**·비밀번호 하드코딩 0 검사. 11/11 pass |
 | 9 | 매뉴얼 개념그래프·action binding 없음 | Gap | ↪ **후속** | Q&A엔 무방. `ManualActionBinding`은 "다음" |
+
+### 2.5 배포 방식 정정 — `kubectl patch` → `kubectl apply` (근본 원인)
+
+감사 재검증이 잡은 drift의 근본 원인은 배포 방식이었다: bk1~bk3은 `kubectl patch`로 **`spec.image.digest`·`spec.manifest.sha256`만** 갱신 → `uipluginpackage.yaml`에서 바꾼 **다른 필드(`spec.permissions` 등)는 클러스터에 반영되지 않음**. "소스 완료"가 "live 완료"를 보장하지 않았다.
+
+- 정정: bk4부터 배포 = **`kubectl apply -f uipluginpackage.yaml`** (전체 선언형 상태 재적용) → digest·manifest·permissions가 한 번에 정합. ADR-005R1 선언형 정신과도 정합.
+- 교훈(문서화): [05-packaging-signing-deploy](05-packaging-signing-deploy.md) 배포 절차를 patch→apply로 갱신. **spec 필드를 바꿨으면 patch가 아니라 apply**. 완료 판정은 반드시 **live spec 재확인**으로 닫는다(소스 diff만으로 닫지 않는다).
 
 ## 3. 노티(07) 정합 — Claim/Binding · 선언형 write-path
 
@@ -53,7 +61,8 @@
 - samba Deployment: DOMAINPASS=secretKeyRef(`foundation-identity-samba-creds`), pod Running/Ready, DOMAINPASS Secret에서 해석(len 확인, 값 미출력).
 - NetworkPolicy: `from`=[keycloak, foundation ns].
 - PromQL: 임의쿼리 400 거부, samba_ad_* 200 허용.
-- registration `samba-ad` Enabled, image `@sha256:ed7a0928`.
+- **live `spec.permissions` = `["api:proxy","manual:contribute"]`**(page:register 제거 확인 — bk4 apply 후 재확인).
+- registration `samba-ad` Enabled, image `@sha256:8dbb6209`(bk4).
 
 ## 6. 결론
 

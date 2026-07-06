@@ -67,11 +67,13 @@ node .../sign-and-pin.mjs ui-shell <key.pem>          # → 새 manifestSha256
 docker build -t ghcr.io/opensphere-platform/plugin-samba-ad:vN .
 docker push  ghcr.io/opensphere-platform/plugin-samba-ad:vN   # → "vN: digest: sha256:…"
 
-# 3) 라이브 CR 패치(digest + manifest.sha256 동시)  — kubectl set image 직접수정 금지(controller가 되돌림)
-kubectl patch uipluginpackage samba-ad -n opensphere-system --type merge \
-  -p '{"spec":{"image":{"digest":"sha256:…"},"manifest":{"sha256":"…"}}}'
+# 3) uipluginpackage.yaml에 새 digest/manifest.sha256 기입 후 → 전체 선언형 apply(권장)
+#    ⚠️ kubectl patch로 digest/manifest만 갱신하면 파일의 다른 필드(spec.permissions 등)가 live에 반영 안 됨(drift).
+#       spec 필드를 바꿨으면 반드시 apply. (kubectl set image로 Deployment 직접수정은 금지 — controller가 되돌림.)
+kubectl apply -f uipluginpackage.yaml     # digest·manifest·permissions 등 전체 상태 정합
 
-# 4) 레포 정본(uipluginpackage.yaml)도 같은 값으로 갱신(드리프트 방지)
+# 4) 완료 판정은 live spec 재확인으로 닫는다(소스 diff만으로 닫지 않음)
+kubectl get uipluginpackage samba-ad -n opensphere-system -o jsonpath='{.spec.permissions}{"\n"}'
 ```
 
 ## 5.5 롤아웃 검증
