@@ -263,6 +263,7 @@ class SambaAdElement extends HTMLElement {
       const res = await fetch(`${API_BASE}/api/samba`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`samba: HTTP ${res.status}`);
       this.render(await res.json());
+      this._bindStageNav();
       const btn = this.querySelector('#sc-cfg-save');
       if (btn) btn.onclick = () => this._saveConfig();
       const bkSave = this.querySelector('#sc-bk-save');
@@ -323,6 +324,44 @@ class SambaAdElement extends HTMLElement {
     return `<select id="sc-cfg-sc" class="os-filter">${opts || `<option value="${esc(cur)}" selected>${esc(cur || '—')}</option>`}</select>`;
   }
 
+  stage() {
+    try {
+      const parts = location.pathname.split('/').filter(Boolean);
+      const i = parts.indexOf('samba');
+      const s = i >= 0 ? parts[i + 1] : '';
+      return s === 'install' || s === 'manage' ? s : 'preflight';
+    } catch { return 'preflight'; }
+  }
+
+  stagePath(stage) {
+    const suffix = stage === 'preflight' ? '' : `/${stage}`;
+    return `/p/foundation/samba${suffix}${location.search}${location.hash}`;
+  }
+
+  _bindStageNav() {
+    this.querySelectorAll('[data-sc-stage]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        const stage = el.getAttribute('data-sc-stage') || 'preflight';
+        history.pushState(history.state, '', this.stagePath(stage));
+        this._load().then(() => {
+          if (stage === 'manage') { this._loadCharts(); this._loadLogs(); this._loadBackup(); }
+        });
+      });
+    });
+  }
+
+  stageNav(active, pf) {
+    const state = pf?.installState || 'Unknown';
+    const activeCls = (s) => active === s ? 'btn-primary' : 'btn-outline';
+    return `<div class="os-actions">
+      <button class="btn btn-sm ${activeCls('preflight')}" data-sc-stage="preflight">Preflight</button>
+      <button class="btn btn-sm ${activeCls('install')}" data-sc-stage="install">Install</button>
+      <button class="btn btn-sm ${activeCls('manage')}" data-sc-stage="manage">Manage</button>
+      <span class="os-sub">installState=${esc(state)}</span>
+    </div>`;
+  }
+
   preflight(d) {
     const pf = d.preflight || { checks: [], installState: 'Unknown', blockers: 0, warnings: 0 };
     const cls = (state) => ({
@@ -360,6 +399,54 @@ class SambaAdElement extends HTMLElement {
       </div></div>`;
   }
 
+  renderPreflight(d) {
+    const pf = d.preflight || {};
+    const next = pf.blockers === 0
+      ? '<button class="btn btn-primary btn-sm" data-sc-stage="install">Install 단계로 이동</button>'
+      : '<button class="btn btn-primary btn-sm" disabled>BLOCK 해소 후 Install 가능</button>';
+    this.innerHTML = `
+      <div class="os-title-row"><h2 class="os-h2">Samba-AD Preflight <span class="label label-info">Day-0</span></h2></div>
+      <p class="os-sub">Samba-AD operand를 배포하기 전에 FoundationModel, engine option, realm, StorageClass, secret reference, 소비자 준비 상태를 확인합니다.</p>
+      ${this.stageNav('preflight', pf)}
+      ${this.preflight(d)}
+      <div class="card"><div class="card-block">
+        <h3 class="card-title">Next</h3>
+        <p class="os-sub">Preflight가 BLOCK 없이 통과하면 Install 단계에서 control-plane apply 계약을 확인합니다. 현재 페이지는 관리 화면이 아니라 배포 전 점검 화면입니다.</p>
+        <div class="os-actions">${next}</div>
+      </div></div>`;
+  }
+
+  renderInstall(d) {
+    const pf = d.preflight || {};
+    const installed = pf.installState === 'Installed';
+    this.innerHTML = `
+      <div class="os-title-row"><h2 class="os-h2">Samba-AD Install <span class="label label-info">Day-1</span></h2></div>
+      <p class="os-sub">Preflight 이후 Samba-AD operand 선언을 control-plane이 적용하는 설치 단계입니다.</p>
+      ${this.stageNav('install', pf)}
+      <div class="alert ${installed ? 'alert-info' : (pf.blockers === 0 ? 'alert-success' : 'alert-danger')}"><div class="alert-items">
+        <div class="alert-item static"><span class="alert-text">${installed
+          ? 'Samba-AD operand는 이미 설치되어 있습니다. 설치 후 운영은 Manage 단계에서 확인하세요.'
+          : (pf.blockers === 0
+            ? 'Install gate is open. control-plane can apply /operand/manifests for Samba-AD.'
+            : 'Install gate is blocked. Return to Preflight and resolve BLOCK items first.')}</span></div>
+      </div></div>
+      <div class="clr-row">
+        ${this.card('Install gate', `
+          <table class="table"><tbody>${this.kv([
+            ['Preflight blockers', `<span class="label ${pf.blockers ? 'label-danger' : 'label-success'}">${esc(pf.blockers ?? '—')}</span>`],
+            ['Warnings', `<span class="label ${pf.warnings ? 'label-warning' : 'label-success'}">${esc(pf.warnings ?? '—')}</span>`],
+            ['Operand declaration', '<span class="os-mono">GET /operand/manifests</span>'],
+            ['Apply owner', 'Foundation control-plane (SSA)'],
+          ])}</tbody></table>`) }
+        ${this.card('Install actions', `
+          <p class="os-sub">현재 구현은 설치 게이트 확인 단계입니다. 실제 apply는 Foundation control-plane의 선언형 reconciler가 수행해야 하며, plugin UI가 직접 kubectl apply를 실행하지 않습니다.</p>
+          <div class="os-actions">
+            <button class="btn btn-sm btn-outline" data-sc-stage="preflight">Preflight 다시 확인</button>
+            <button class="btn btn-sm btn-primary" data-sc-stage="manage"${installed ? '' : ' disabled'}>Manage로 이동</button>
+          </div>`) }
+      </div>`;
+  }
+
   kv(pairs) { return pairs.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join(''); }
   card(title, bodyHtml) {
     return `<div class="clr-col-12 clr-col-lg-6"><div class="card">
@@ -369,6 +456,10 @@ class SambaAdElement extends HTMLElement {
   }
 
   render(d) {
+    const stage = this.stage();
+    if (stage === 'preflight') { this.renderPreflight(d); return; }
+    if (stage === 'install') { this.renderInstall(d); return; }
+
     const w = d.workload || {};
     const m = d.model || {};
     const bkc = d.backup || {};
@@ -398,8 +489,8 @@ class SambaAdElement extends HTMLElement {
       <div class="os-title-row"><h2 class="os-h2">Samba-AD <span class="label label-info">plugin</span> <span class="label ${phasePill}">${esc(phase)}</span></h2></div>
       <p class="os-sub">workspace/사원 디렉터리 · Samba Active Directory DC · realm ${esc(realm)} · ns ${esc(d.meta?.ns)}
         · <strong>독립 서명 plugin(OpenSphere-plugin-samba-ad) — 기능 컨테이너 ${esc(d.meta?.servedBy)}가 서빙, Foundation(host)이 안층 마운트</strong></p>
+      ${this.stageNav('manage', d.preflight)}
       ${notDeployed}
-      ${this.preflight(d)}
       <div class="clr-row">
         ${this.card(`디렉터리 실물 <span class="os-mono">${esc('foundation-identity-samba')}</span>`, `
           <table class="table"><tbody>${this.kv([
