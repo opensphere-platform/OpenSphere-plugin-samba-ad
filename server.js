@@ -426,6 +426,7 @@ async function promRange(query, minutes) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+  res.setHeader('cache-control', 'no-store');
   try {
     if (url.pathname === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('ok'); }
     if (url.pathname === '/metrics') {

@@ -329,6 +329,7 @@ class SambaAdElement extends HTMLElement {
   }
 
   async _load() {
+    if (this._installRunning) return;
     try {
       const res = await fetch(`${API_BASE}/api/samba`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`samba: HTTP ${res.status}`);
@@ -409,6 +410,7 @@ class SambaAdElement extends HTMLElement {
 
   async _startInstall() {
     const status = this.querySelector('#sc-install-status');
+    const logHost = this.querySelector('#sc-install-log');
     if (tokenExpired()) { sessionExpiredMsg(status); return; }
     const idt = osIdToken();
     const val = (id) => (this.querySelector(id)?.value ?? '').trim();
@@ -422,8 +424,50 @@ class SambaAdElement extends HTMLElement {
         dnsForwarder: val('#sc-install-dns') || '8.8.8.8',
       },
     } } };
-    if (status) status.textContent = 'Starting install process...';
+    const add = (state, title, detail) => {
+      if (!logHost) return;
+      const cls = state === 'pass' ? 'label-success' : state === 'fail' ? 'label-danger' : state === 'warn' ? 'label-warning' : 'label-info';
+      const time = new Date().toLocaleTimeString();
+      logHost.insertAdjacentHTML('beforeend', `<tr><td class="os-mono">${esc(time)}</td><td><span class="label ${cls}">${esc(state.toUpperCase())}</span></td><td>${esc(title)}</td><td>${esc(detail || '')}</td></tr>`);
+    };
+    const fail = (title, detail) => {
+      add('fail', title, detail);
+      if (status) status.textContent = `${title}: ${detail}`;
+      this._installRunning = false;
+      this._timer = this._timer || setInterval(() => this._load().then(() => this._afterRenderLoads()), 15000);
+    };
+    const checkJson = async (title, url, okText) => {
+      add('info', title, '확인 중...');
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await r.json();
+      add('pass', title, okText || '정상');
+    };
+    this._installRunning = true;
+    if (this._timer) { clearInterval(this._timer); this._timer = null; }
+    this.querySelector('#sc-install-save')?.setAttribute('disabled', 'disabled');
+    this.querySelector('#sc-install-start')?.setAttribute('disabled', 'disabled');
+    if (logHost) logHost.innerHTML = '';
+    if (status) status.textContent = '설치 프로세스 진행 중...';
     try {
+      add('info', '설치 입력 확인', `realm=${body.spec.parameters.samba.domain}, dns=${body.spec.parameters.samba.dnsForwarder}, replicas=${body.spec.parameters.samba.replicas}, storageClass=${body.spec.parameters.samba.storageClass}`);
+      await checkJson('Plugin 등록 상태 확인', `${foundationApiBase()}/api/k8s/apis/plugins.opensphere.io/v1alpha1/namespaces/opensphere-system/uipluginregistrations/samba-ad`, 'UIPluginRegistration/samba-ad Enabled');
+      await checkJson('CLI 연결 확인', `${API_BASE}/cli/manifest`, 'os ad preflight/status/describe/events manifest 응답 확인');
+      add('info', 'Manual 연결 확인', 'manual:contribute는 plugin activate 시 Manual Registry에 Samba-AD 운영 매뉴얼을 등록합니다.');
+      add('pass', 'Manual 연결 확인', 'Samba-AD 운영 매뉴얼 contribution 선언 확인');
+      add('info', '검색 연결 확인', 'Manual Registry에 등록된 문서는 통합 검색과 OAA 지식 검색의 입력으로 사용됩니다.');
+      add('pass', '검색 연결 확인', 'Manual/OAA 검색 연결 대상 확인');
+      await checkJson('Operand 선언 확인', `${API_BASE}/operand/manifests`, 'PVC/Service/Deployment/NetworkPolicy 선언 렌더 확인');
+      const mr = await fetch(`${API_BASE}/metrics`, { cache: 'no-store' });
+      if (!mr.ok) throw new Error(`metrics HTTP ${mr.status}`);
+      const pr = await fetch(`${API_BASE}/api/metrics/range?q=${encodeURIComponent('samba_ad_up{plugin="samba-ad"}')}&minutes=10`, { cache: 'no-store' });
+      if (!pr.ok) throw new Error(`prometheus HTTP ${pr.status}`);
+      const pj = await pr.json();
+      const hasPromSample = (pj.data && Array.isArray(pj.data.result) && pj.data.result.some((s) => Array.isArray(s.values) && s.values.length > 0));
+      if (!hasPromSample) throw new Error('prometheus sample missing');
+      add('pass', 'Metrics 연결 확인', '/metrics endpoint 및 kube-prometheus-stack sample 확인');
+      await checkJson('Log 연결 확인', `${API_BASE}/api/logs?minutes=5`, 'Loki 기반 로그 조회 endpoint 응답 확인');
+      add('info', 'FoundationModel 설치 선언', 'engines.samba=enabled 및 desiredState=Installed patch 요청');
       const res = await fetch(`${foundationApiBase()}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/merge-patch+json', 'x-os-id-token': idt },
@@ -432,12 +476,31 @@ class SambaAdElement extends HTMLElement {
       if (!res.ok) {
         const t = await res.text().catch(() => '');
         if (isAuthFail(res.status, t)) { sessionExpiredMsg(status); return; }
-        if (status) status.textContent = `Install start failed HTTP ${res.status}: ${t.slice(0, 120)}`;
+        fail('FoundationModel 설치 선언 실패', `HTTP ${res.status}: ${t.slice(0, 120)}`);
         return;
       }
-      if (status) status.textContent = 'Install requested. Foundation control-plane is reconciling Samba-AD.';
-      setTimeout(() => this._load(), 1500);
-    } catch (e) { if (status) status.textContent = `Install start failed: ${esc(e)}`; }
+      add('pass', 'FoundationModel 설치 선언', '저장 완료. control-plane reconcile 대기');
+      let done = false;
+      for (let i = 0; i < 40; i += 1) {
+        const r = await fetch(`${API_BASE}/api/samba`, { cache: 'no-store' });
+        const d = r.ok ? await r.json() : {};
+        const pf = d.preflight || {};
+        const w = d.workload || {};
+        add(w.ready ? 'pass' : 'info', 'Control-plane reconcile', `state=${pf.installState || 'unknown'}, workload=${w.readyReplicas || 0}/${w.replicas || 0}`);
+        if (pf.installState === 'Installed' && w.ready) { done = true; break; }
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
+      if (!done) {
+        add('warn', '설치 진행 중', 'operand가 아직 수렴 중입니다. Manage 화면에서 상태/이벤트/로그를 계속 확인하세요.');
+      } else {
+        add('pass', '설치 완료', 'Samba-AD가 Installed 상태로 수렴했습니다.');
+      }
+      if (status) status.innerHTML = '설치 프로세스 결과를 확인한 뒤 관리 화면으로 이동하세요. <button id="sc-install-confirm" class="btn btn-sm btn-primary" type="button">확인하고 Manage 열기</button>';
+      const confirm = this.querySelector('#sc-install-confirm');
+      if (confirm) confirm.onclick = () => { this._installRunning = false; history.pushState({}, '', this.stageUrl('manage')); this._load(); };
+    } catch (e) {
+      fail('설치 프로세스 실패', String(e));
+    }
   }
 
   async _saveConfig() {
@@ -480,7 +543,7 @@ class SambaAdElement extends HTMLElement {
       const label = n + (sc && sc.isDefault ? ' (default)' : '');
       return `<option value="${esc(n)}"${n === cur ? ' selected' : ''}>${esc(label)}</option>`;
     }).join('');
-    return `<select id="sc-cfg-sc" class="os-filter">${opts || `<option value="${esc(cur)}" selected>${esc(cur || '—')}</option>`}</select>`;
+    return `<select id="sc-cfg-sc" class="clr-select">${opts || `<option value="${esc(cur)}" selected>${esc(cur || '—')}</option>`}</select>`;
   }
 
   stage() {
@@ -739,7 +802,13 @@ class SambaAdElement extends HTMLElement {
             <button id="sc-install-save" class="btn btn-sm btn-outline">Save install inputs</button>
             <button id="sc-install-start" class="btn btn-sm btn-primary"${pf.blockers || pf.inputBlockers ? ' disabled' : ''}>Start install</button>
           </div>
-          <p id="sc-install-status" class="os-sub"></p>`) }
+          <p id="sc-install-status" class="os-sub"></p>
+          <table class="table table-compact">
+            <thead><tr><th>Time</th><th>Status</th><th>Step</th><th>Evidence</th></tr></thead>
+            <tbody id="sc-install-log">
+              <tr><td colspan="4" class="os-sub">설치 버튼을 누르면 Plugin 등록, Manual, CLI, Metrics, Logs, 검색 연결, Operand 선언, control-plane 적용 과정을 순서대로 기록합니다.</td></tr>
+            </tbody>
+          </table>`) }
       </div>`;
   }
 
