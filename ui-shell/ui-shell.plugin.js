@@ -655,7 +655,9 @@ class SambaAdElement extends HTMLElement {
     const installed = pf.installState === 'Installed';
     const secret = d.bootstrapSecret || {};
     const canApply = !!pf.readyToApply;
-    const scInstall = this._scSelect(d).replace('id="sc-cfg-sc"', 'id="sc-install-sc"');
+    const scInstall = this._scSelect(d)
+      .replace('id="sc-cfg-sc"', 'id="sc-install-sc"')
+      .replace('class="os-filter"', 'class="clr-select"');
     this.innerHTML = `
       <div class="os-title-row"><h2 class="os-h2">${sambaLogo()}Samba-AD Install <span class="label label-info">Day-1</span></h2></div>
       <p class="os-sub">Preflight 이후 Samba-AD operand 선언을 control-plane이 적용하는 설치 단계입니다.</p>
@@ -682,15 +684,59 @@ class SambaAdElement extends HTMLElement {
           <div class="os-actions"><button class="btn btn-sm btn-primary" data-sc-action="manage">Open Manage</button></div>`
           : `
           <input id="sc-install-secret-found" type="hidden" value="${secret.found ? 'true' : 'false'}">
-          <div class="clr-row">
-            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">Directory realm<input id="sc-install-domain" class="os-filter" value="${esc((d.config || {}).domain)}"></label></div>
-            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">StorageClass${scInstall}</label></div>
-            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">DNS forwarder<input id="sc-install-dns" class="os-filter" value="${esc((d.config || {}).dnsForwarder)}"></label></div>
-            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">Replicas<input id="sc-install-replicas" class="os-filter" type="number" min="1" value="${esc((d.config || {}).replicas)}"></label></div>
-            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">Bootstrap domain password<input id="sc-install-pass" class="os-filter" type="password" autocomplete="new-password" placeholder="${secret.found ? 'leave blank to keep existing Secret' : 'required'}"></label></div>
-            <div class="clr-col-12 clr-col-md-6"><label class="os-sub">Confirm password<input id="sc-install-pass2" class="os-filter" type="password" autocomplete="new-password"></label></div>
-          </div>
-          <p class="os-sub">Password is written only to Kubernetes Secret stringData and is never returned by the plugin API or operand manifest.</p>
+          <form class="clr-form clr-form-horizontal sc-install-form" aria-label="Samba-AD install inputs">
+            <div class="clr-row">
+              <div class="clr-col-12 clr-col-lg-6">
+                <div class="clr-control-container">
+                  <label for="sc-install-domain" class="clr-control-label">Directory realm</label>
+                  <div class="clr-input-wrapper">
+                    <input id="sc-install-domain" class="clr-input" value="${esc((d.config || {}).domain)}" autocomplete="off">
+                  </div>
+                </div>
+              </div>
+              <div class="clr-col-12 clr-col-lg-6">
+                <div class="clr-control-container">
+                  <label for="sc-install-sc" class="clr-control-label">StorageClass</label>
+                  <div class="clr-select-wrapper">${scInstall}</div>
+                </div>
+              </div>
+              <div class="clr-col-12 clr-col-lg-6">
+                <div class="clr-control-container">
+                  <label for="sc-install-dns" class="clr-control-label">DNS forwarder</label>
+                  <div class="clr-input-wrapper">
+                    <input id="sc-install-dns" class="clr-input" value="${esc((d.config || {}).dnsForwarder)}" autocomplete="off">
+                  </div>
+                </div>
+              </div>
+              <div class="clr-col-12 clr-col-lg-6">
+                <div class="clr-control-container">
+                  <label for="sc-install-replicas" class="clr-control-label">Replicas</label>
+                  <div class="clr-input-wrapper">
+                    <input id="sc-install-replicas" class="clr-input" type="number" min="1" value="${esc((d.config || {}).replicas)}">
+                  </div>
+                </div>
+              </div>
+              <div class="clr-col-12 clr-col-lg-6">
+                <div class="clr-control-container">
+                  <label for="sc-install-pass" class="clr-control-label">Bootstrap domain password</label>
+                  <div class="clr-input-wrapper">
+                    <input id="sc-install-pass" class="clr-input" type="password" autocomplete="new-password" placeholder="${secret.found ? 'leave blank to keep existing Secret' : 'required'}">
+                  </div>
+                </div>
+              </div>
+              <div class="clr-col-12 clr-col-lg-6">
+                <div class="clr-control-container">
+                  <label for="sc-install-pass2" class="clr-control-label">Confirm password</label>
+                  <div class="clr-input-wrapper">
+                    <input id="sc-install-pass2" class="clr-input" type="password" autocomplete="new-password">
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="clr-control-container sc-install-helper">
+              <span class="clr-subtext">Password is written only to Kubernetes Secret stringData and is never returned by the plugin API or operand manifest.</span>
+            </div>
+          </form>
           <div class="os-actions">
             <button id="sc-install-save" class="btn btn-sm btn-outline">Save install inputs</button>
             <button id="sc-install-start" class="btn btn-sm btn-primary"${pf.blockers || pf.inputBlockers ? ' disabled' : ''}>Start install</button>
