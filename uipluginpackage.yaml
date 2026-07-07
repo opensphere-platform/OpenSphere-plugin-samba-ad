@@ -17,13 +17,13 @@ spec:
   serviceAccountName: opensphere-plugin-samba-ad
   image:
     repository: ghcr.io/opensphere-platform/plugin-samba-ad
-    digest: sha256:10579e50ae6d254586d1b8f7ee47da300f937f38ab26185a1ee14a7a02983058
+    digest: sha256:4e1d26ca3f710d5be83658ed713990ca48065bdbeaa6d3461f23a5d52add4bad
   nav:
     band: "Operate"
     label: "Samba-AD"
   manifest:
     path: /plugins/ui-shell.manifest.json
-    sha256: "8f5a80ee3352a386080d2fc30fd361106b0a610baa7d512a1e14756d40d06f4c"
+    sha256: "088e75aec45769adfd5e6d23bf7af0eb1002898040e8c8ec23eac41de6b1f1d6"
     signaturePath: /plugins/ui-shell.manifest.json.sig
   trust:
     keyId: opensphere-plugins-v3-samba-ad
