@@ -390,14 +390,12 @@ class SambaAdElement extends HTMLElement {
         return;
       }
       if (pass) {
-        const secret = {
-          apiVersion: 'v1',
-          kind: 'Secret',
-          metadata: { name: 'foundation-identity-samba-creds', namespace: 'opensphere-foundation', labels: { 'opensphere.io/plugin': 'samba-ad', 'opensphere.io/managed-by': 'foundation' } },
-          type: 'Opaque',
-          stringData: { 'domain-password': pass },
-        };
-        const sr = await this._ensureCR(base, idt, 'api/v1/namespaces/opensphere-foundation', 'secrets', 'foundation-identity-samba-creds', secret);
+        const srRaw = await fetch(`${base}/api/foundation/samba/bootstrap-secret`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-os-id-token': idt },
+          body: JSON.stringify({ password: pass }),
+        });
+        const sr = { ok: srRaw.ok, status: srRaw.status, body: await srRaw.text().catch(() => '') };
         if (!sr.ok) {
           if (isAuthFail(sr.status, sr.body)) { sessionExpiredMsg(status); return; }
           if (status) status.textContent = `Bootstrap Secret save failed HTTP ${sr.status}: ${(sr.body || '').slice(0, 120)}`;
