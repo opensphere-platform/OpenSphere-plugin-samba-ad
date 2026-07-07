@@ -370,6 +370,9 @@ function cliManifest() {
 //   kps가 스크레이프. 위조 0(readyReplicas·restarts·TCP dial 등 실측만).
 // /api/metrics/range: UI 차트용 — kps range API 프록시(시계열).
 const PROM = process.env.PROMETHEUS_URL || 'http://kps-prometheus.monitoring.svc:9090';
+const GRAFANA = process.env.GRAFANA_URL || 'http://kps-grafana.monitoring.svc';
+const GRAFANA_NS = process.env.GRAFANA_NS || 'monitoring';
+const GRAFANA_SECRET = process.env.GRAFANA_SECRET || 'kps-grafana';
 function tcpProbe(host, port, timeoutMs = 2000) {
   return new Promise((resolve) => {
     const s = new net.Socket();
@@ -424,6 +427,71 @@ async function promRange(query, minutes) {
   catch { return { __status: 504 }; }
 }
 
+function b64(data) {
+  return Buffer.from(String(data || ''), 'base64').toString('utf8');
+}
+
+async function grafanaCredentials() {
+  if (process.env.GRAFANA_USER && process.env.GRAFANA_PASSWORD) {
+    return { user: process.env.GRAFANA_USER, password: process.env.GRAFANA_PASSWORD, source: 'env' };
+  }
+  const s = await k8sGet(`/api/v1/namespaces/${GRAFANA_NS}/secrets/${GRAFANA_SECRET}`);
+  if (s.__status) return { __status: s.__status };
+  const user = b64(s.data?.['admin-user']);
+  const password = b64(s.data?.['admin-password']);
+  if (!user || !password) return { __status: 500 };
+  return { user, password, source: `secret/${GRAFANA_NS}/${GRAFANA_SECRET}` };
+}
+
+async function grafanaApi(pathname, auth) {
+  const headers = {};
+  if (auth) {
+    const c = await grafanaCredentials();
+    if (c.__status) return { __status: c.__status };
+    headers.Authorization = `Basic ${Buffer.from(`${c.user}:${c.password}`).toString('base64')}`;
+  }
+  try {
+    const r = await fetchT(`${GRAFANA}${pathname}`, { headers }, 6000);
+    if (!r.ok) return { __status: r.status };
+    return r.json();
+  } catch { return { __status: 504 }; }
+}
+
+async function grafanaSummary() {
+  const health = await grafanaApi('/api/health', false);
+  const datasources = await grafanaApi('/api/datasources', true);
+  const dashboards = await grafanaApi('/api/search?query=samba&limit=20', true);
+  return {
+    url: GRAFANA,
+    health: health.__status ? { ok: false, status: health.__status } : {
+      ok: true,
+      version: health.version || '',
+      database: health.database || '',
+      commit: health.commit || '',
+    },
+    authReady: !datasources.__status,
+    authStatus: datasources.__status || 200,
+    datasources: datasources.__status ? [] : (datasources || []).map((d) => ({
+      name: d.name,
+      uid: d.uid,
+      type: d.type,
+      typeName: d.typeName,
+      isDefault: !!d.isDefault,
+      readOnly: !!d.readOnly,
+      url: d.url,
+    })),
+    dashboards: dashboards.__status ? [] : (dashboards || []).map((d) => ({
+      title: d.title,
+      uid: d.uid,
+      type: d.type,
+      uri: d.uri,
+      url: d.url,
+      folderTitle: d.folderTitle || '',
+    })),
+    dashboardStatus: dashboards.__status || 200,
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   res.setHeader('cache-control', 'no-store');
@@ -440,6 +508,11 @@ const server = http.createServer(async (req, res) => {
       const out = await promRange(q, minutes);
       res.writeHead(out.__status ? 502 : 200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(out.__status ? { error: `prometheus HTTP ${out.__status}` } : out));
+    }
+    if (url.pathname === '/api/grafana') {
+      const out = await grafanaSummary();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify(out));
     }
     if (url.pathname === '/api/logs') {
       const minutes = parseInt(url.searchParams.get('minutes') || '60', 10);

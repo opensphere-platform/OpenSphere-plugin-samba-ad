@@ -192,11 +192,35 @@ class SambaAdElement extends HTMLElement {
         return `<tr><td>${esc(meta.label)}</td><td><span class="label ${cls}">${esc(now)}</span></td><td>${esc(windowText)}</td><td>${esc(changedAt)}</td></tr>`;
       }).join('');
       const anyData = results.some((r) => r?.data?.result?.[0]?.values?.length);
+      let grafanaHtml = '<div class="card"><div class="card-block"><div class="os-sech">Grafana</div><p class="os-sub">Loading Grafana API information...</p></div></div>';
+      try {
+        const gr = await fetch(`${API_BASE}/api/grafana`, { cache: 'no-store' });
+        const g = gr.ok ? await gr.json() : null;
+        if (g) {
+          const healthLabel = g.health?.ok
+            ? `<span class="label label-success">Connected</span> <span class="os-sub">v${esc(g.health.version || 'unknown')} / db ${esc(g.health.database || 'unknown')}</span>`
+            : `<span class="label label-danger">Unavailable</span> <span class="os-sub">HTTP ${esc(g.health?.status || 'unknown')}</span>`;
+          const dsRows = (g.datasources || []).map((d) =>
+            `<tr><td>${esc(d.name)}</td><td>${esc(d.typeName || d.type)}</td><td>${d.isDefault ? '<span class="label label-info">Default</span>' : ''}</td><td class="os-mono">${esc(d.uid || '')}</td></tr>`).join('');
+          const dashRows = (g.dashboards || []).map((d) =>
+            `<tr><td>${esc(d.title)}</td><td>${esc(d.folderTitle || '-')}</td><td class="os-mono">${esc(d.uid || '')}</td><td>${d.url ? `<span class="os-mono">${esc(d.url)}</span>` : '-'}</td></tr>`).join('');
+          grafanaHtml = `<div class="card"><div class="card-block">
+            <div class="os-sech">Grafana <span class="os-sub">${esc(g.url || '')}</span></div>
+            <p>${healthLabel} ${g.authReady ? '<span class="label label-success">API auth</span>' : `<span class="label label-danger">API auth HTTP ${esc(g.authStatus || 'unknown')}</span>`}</p>
+            <table class="table table-compact"><thead><tr><th>Datasource</th><th>Type</th><th>Role</th><th>UID</th></tr></thead><tbody>${dsRows || '<tr><td colspan="4" class="os-sub">No Grafana datasources returned.</td></tr>'}</tbody></table>
+            <div class="os-sub">Samba dashboard search</div>
+            <table class="table table-compact"><thead><tr><th>Dashboard</th><th>Folder</th><th>UID</th><th>URL</th></tr></thead><tbody>${dashRows || '<tr><td colspan="4" class="os-sub">No Samba-AD dashboard is registered in Grafana yet.</td></tr>'}</tbody></table>
+          </div></div>`;
+        }
+      } catch (e) {
+        grafanaHtml = `<div class="card"><div class="card-block"><div class="os-sech">Grafana</div><p class="os-sub">Grafana API lookup failed: ${esc(e)}</p></div></div>`;
+      }
       host.innerHTML = `<div class="os-sech">Metrics <span class="os-sub">operational signals, last 30 minutes</span></div>
         ${anyData ? `<div class="card"><div class="card-block">
           <table class="table"><thead><tr><th>Signal</th><th>Now</th><th>Window</th><th>Last transition</th></tr></thead><tbody>${rows}</tbody></table>
           <p class="os-sub">Boolean health signals are shown as state and availability, not as line charts. Restart is shown as a 30m counter delta.</p>
-        </div></div>` : '<p class="os-sub">No metric samples yet. Check ServiceMonitor scraping and Prometheus connectivity.</p>'}`;
+        </div></div>` : '<p class="os-sub">No metric samples yet. Check ServiceMonitor scraping and Prometheus connectivity.</p>'}
+        ${grafanaHtml}`;
     } catch (e) {
       host.innerHTML = `<div class="os-sech">Metrics</div><p class="os-sub">Metric lookup failed: ${esc(e)}</p>`;
     }
