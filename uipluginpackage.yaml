@@ -26,7 +26,7 @@ spec:
     sha256: "cbbfb4d29c272ccd1f0492ec03fce24b5952b506d723259781eade62ae2e02dd"
     signaturePath: /plugins/ui-shell.manifest.json.sig
   trust:
-    keyId: opensphere-plugins-v3-samba-ad
+    keyId: opensphere-plugins-v2
   shellCompat: ">=0.2.0 <0.9.0"
   permissions:
     - page:register
