@@ -10,26 +10,29 @@ metadata:
   labels:
     opensphere.io/host-ref: foundation
 spec:
+  kind: plugin
+  hostRef: foundation
+  hostApiVersion: "1.0.0"
+  hostCompat: ">=1.0.0 <2.0.0"
   displayName: "Samba-AD"
   owner: platform-foundation
   version: 0.1.0
   description: "Workspace directory management plugin for Samba AD DC, mounted inside Foundation."
   serviceAccountName: opensphere-plugin-samba-ad
   image:
-    repository: ghcr.io/opensphere-platform/plugin-samba-ad
-    digest: sha256:e791498400761cbe661249fb873851e481e9a0eaaf00eb78b6256a2ada60d022
+    repository: plugin-samba-ad
+    digest: sha256:07b1576b9942a5136d72a74e0c6abf582145a8653ddb718735f7ba65fa0e155e
   nav:
     band: "Operate"
     label: "Samba-AD"
   manifest:
     path: /plugins/ui-shell.manifest.json
-    sha256: "2218f2da3afcb484ffa14b4e1186217591126c72099b7855e74bc6999d4a189d"
+    sha256: "e71e8df4249091cda5e07ecbd2e25a21add5df130a35f437aa4499e39b992ebd"
     signaturePath: /plugins/ui-shell.manifest.json.sig
   trust:
     keyId: opensphere-plugins-v1
   shellCompat: ">=0.2.0 <0.9.0"
   permissions:
-    - page:register
     - api:proxy
     - manual:contribute
   api:
@@ -37,6 +40,15 @@ spec:
   cli:
     namespace: ad
     manifestPath: /cli/manifest
+  contributions:
+    page: { enabled: false, reason: "Mounted inside the Foundation subShell" }
+    navigation: { enabled: false, mode: none, reason: "Foundation owns the child navigation" }
+    api: { enabled: true, basePath: /api/plugins/foundation }
+    cli: { enabled: true, namespace: ad, manifestPath: /cli/manifest }
+    manual: { enabled: true, sourceId: plugin:samba-ad, mode: runtime }
+    search: { enabled: true, mode: index }
+    notification: { enabled: true, frontend: false, backend: true }
+    observability: { enabled: true, logs: true, metrics: true, traces: false }
 ---
 apiVersion: plugins.opensphere.io/v1alpha1
 kind: UIPluginRegistration

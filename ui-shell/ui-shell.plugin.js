@@ -10,36 +10,25 @@
 
 const TAG = 'osp-samba-ad';
 let API_BASE = '';
+let API_FETCH = null;
 const SAMBA_LOGO_URL = 'https://cdn.statically.io/gh/openplatform-labs/images@main/logos/samba-server.svg';
 
 // 설정 저장 = FM/identity.spec.parameters.samba(foundation 도메인 자원) → foundation host의 검증된 write-path
-// (server.js가 x-os-id-token 검증+임퍼소네이션) 재사용. plugin은 폼·스키마·operand 렌더를 소유하되,
+// (Main Shell이 ctx.api.fetch에 인증을 주입하고 server.js가 검증) 재사용. plugin은 폼·스키마·operand 렌더를 소유하되,
 // 도메인 자원 write는 최소권한 원칙상 foundation 경로로(플러그인 SA에 impersonate 권한 미부여).
 function foundationApiBase() { return API_BASE.replace(/\/plugins\/samba-ad$/, '/plugins/foundation'); }
-function osIdToken() {
-  try {
-    const w = window.__OS_AUTH__;
-    const t = typeof w?.token === 'function' ? w.token() : w?.token;
-    return t || '';
-  } catch { return ''; }
+function hostFetch(input, init) {
+  if (typeof API_FETCH !== 'function') return Promise.reject(new Error('Host API fetch capability is unavailable'));
+  return API_FETCH(input, init);
 }
 
-// ── 콘솔 세션(15분 id_token, 자동 갱신 수단 없음 — __OS_AUTH__는 user/token만 노출) 만료 처리 ──
-// 셸이 refresh/login API를 주지 않으므로 복구 = 페이지 새로고침(SSO 재발급). 쓰기 전/후로 만료를 감지해
-// 암호 같은 401 대신 명확한 재로그인 안내를 준다. [[console-15min-token-expiry]]
-function tokenExpired() {
-  const t = osIdToken();
-  if (!t) return true;
-  try { const p = JSON.parse(atob(t.split('.')[1])); return (p.exp - Math.floor(Date.now() / 1000)) <= 5; }
-  catch { return false; }  // 디코드 불가면 서버 검증에 위임(선차단 안 함)
-}
 function isAuthFail(status, body) {
   return status === 401 || /token expired|token missing|unauthorized/i.test(String(body || ''));
 }
 // status 엘리먼트에 세션 만료 안내 + 새로고침 링크(inline onclick은 CSP 차단 → addEventListener). 값 esc 불요(고정 문자열).
 function sessionExpiredMsg(el) {
   if (!el) return;
-  el.innerHTML = '세션이 만료되었습니다 (콘솔 로그인 15분 · 자동 갱신 없음). <a href="#" data-osp-reload>새로고침</a> 후 값을 다시 입력해 저장하세요.';
+  el.innerHTML = '세션이 만료되었습니다. <a href="#" data-osp-reload>다시 인증</a>한 후 값을 다시 입력해 저장하세요.';
   const a = el.querySelector('[data-osp-reload]');
   if (a) a.addEventListener('click', (e) => { e.preventDefault(); location.reload(); });
 }
@@ -109,7 +98,7 @@ class SambaAdElement extends HTMLElement {
     const host = this.querySelector('#sc-logs');
     if (!host) return;
     try {
-      const res = await fetch(`${API_BASE}/api/logs?minutes=60`, { cache: 'no-store' });
+      const res = await hostFetch(`${API_BASE}/api/logs?minutes=60`, { cache: 'no-store' });
       if (!res.ok) {
         const t = await res.json().catch(() => ({}));
         host.innerHTML = `<div class="vl-log-empty">${esc(t.error || `로그 조회 실패 HTTP ${res.status}`)}</div>`;
@@ -138,7 +127,7 @@ class SambaAdElement extends HTMLElement {
     ];
     try {
       const results = await Promise.all(series.map((x) =>
-        fetch(`${API_BASE}/api/metrics/range?q=${encodeURIComponent(x.q)}&minutes=30`, { cache: 'no-store' })
+        hostFetch(`${API_BASE}/api/metrics/range?q=${encodeURIComponent(x.q)}&minutes=30`, { cache: 'no-store' })
           .then((r) => r.ok ? r.json() : null).catch(() => null)));
       const aggregateSeries = (matrix, mode = 'max') => {
         const buckets = new Map();
@@ -194,7 +183,7 @@ class SambaAdElement extends HTMLElement {
       const anyData = results.some((r) => r?.data?.result?.[0]?.values?.length);
       let grafanaHtml = '<div class="card"><div class="card-block"><div class="os-sech">Grafana</div><p class="os-sub">Loading Grafana API information...</p></div></div>';
       try {
-        const gr = await fetch(`${API_BASE}/api/grafana`, { cache: 'no-store' });
+        const gr = await hostFetch(`${API_BASE}/api/grafana`, { cache: 'no-store' });
         const g = gr.ok ? await gr.json() : null;
         if (g) {
           const healthLabel = g.health?.ok
@@ -233,9 +222,9 @@ class SambaAdElement extends HTMLElement {
     const V = `${base}/api/k8s/apis/velero.io/v1/namespaces/velero`;
     try {
       const [schRes, bkRes, bslRes] = await Promise.all([
-        fetch(`${V}/schedules/samba-ad`, { cache: 'no-store' }),
-        fetch(`${V}/backups?labelSelector=${encodeURIComponent('opensphere.io/plugin=samba-ad')}`, { cache: 'no-store' }),
-        fetch(`${V}/backupstoragelocations`, { cache: 'no-store' }),
+        hostFetch(`${V}/schedules/samba-ad`, { cache: 'no-store' }),
+        hostFetch(`${V}/backups?labelSelector=${encodeURIComponent('opensphere.io/plugin=samba-ad')}`, { cache: 'no-store' }),
+        hostFetch(`${V}/backupstoragelocations`, { cache: 'no-store' }),
       ]);
       if (schRes.status === 404 && !schRes.ok && bkRes.status === 404) {
         host.innerHTML = '<p class="os-sub"><span class="label label-warning">Velero 미설치</span> BSS → Velero에서 백업 엔진과 공용 기본 대상을 먼저 구성하세요.</p>';
@@ -274,15 +263,15 @@ class SambaAdElement extends HTMLElement {
     }
   }
 
-  // velero.io CR create-or-merge (foundation 프록시 + x-os-id-token). POST 생성 → 409면 merge-patch.
-  async _ensureCR(base, idt, apiPath, plural, name, obj) {
-    const post = await fetch(`${base}/api/k8s/${apiPath}/${plural}`, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-os-id-token': idt }, body: JSON.stringify(obj),
+  // velero.io CR create-or-merge (Foundation 프록시 + Host-mediated auth). POST 생성 → 409면 merge-patch.
+  async _ensureCR(base, apiPath, plural, name, obj) {
+    const post = await hostFetch(`${base}/api/k8s/${apiPath}/${plural}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj),
     });
     if (post.ok) return { ok: true };
     if (post.status === 409) {
-      const patch = await fetch(`${base}/api/k8s/${apiPath}/${plural}/${name}`, {
-        method: 'PATCH', headers: { 'content-type': 'application/merge-patch+json', 'x-os-id-token': idt }, body: JSON.stringify(obj),
+      const patch = await hostFetch(`${base}/api/k8s/${apiPath}/${plural}/${name}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/merge-patch+json' }, body: JSON.stringify(obj),
       });
       return { ok: patch.ok, status: patch.status, body: patch.ok ? '' : await patch.text().catch(() => '') };
     }
@@ -292,8 +281,6 @@ class SambaAdElement extends HTMLElement {
   // 백업 활성화·저장 — (전용이면 Secret+BSL 생성) → Schedule 등록/갱신 → FM parameters.samba.backup 기록.
   async _saveBackup() {
     const status = this.querySelector('#sc-bk-status');
-    if (tokenExpired()) { sessionExpiredMsg(status); return; }
-    const idt = osIdToken();
     const val = (id) => (this.querySelector(id)?.value ?? '').trim();
     const mode = val('#sc-bk-mode') === 'dedicated' ? 'dedicated' : 'shared';
     const schedule = val('#sc-bk-cron') || '0 2 * * *';
@@ -309,21 +296,21 @@ class SambaAdElement extends HTMLElement {
         dedicated = { endpoint: ep, bucket, region };
         const cloud = `[default]\naws_access_key_id=${ak}\naws_secret_access_key=${sk}\n`;
         const secret = { apiVersion: 'v1', kind: 'Secret', metadata: { name: 'samba-ad-backup-creds', namespace: 'velero', labels: { 'opensphere.io/plugin': 'samba-ad' } }, type: 'Opaque', data: { cloud: btoa(cloud) } };
-        const sRes = await this._ensureCR(base, idt, 'api/v1/namespaces/velero', 'secrets', 'samba-ad-backup-creds', secret);
+        const sRes = await this._ensureCR(base, 'api/v1/namespaces/velero', 'secrets', 'samba-ad-backup-creds', secret);
         if (!sRes.ok) { if (isAuthFail(sRes.status, sRes.body)) { sessionExpiredMsg(status); return; } if (status) status.textContent = `전용 자격증명 저장 실패 HTTP ${sRes.status}: ${(sRes.body || '').slice(0, 120)}`; return; }
         const bsl = { apiVersion: 'velero.io/v1', kind: 'BackupStorageLocation', metadata: { name: 'samba-ad', namespace: 'velero', labels: { 'opensphere.io/plugin': 'samba-ad' } },
           spec: { provider: 'aws', objectStorage: { bucket }, credential: { name: 'samba-ad-backup-creds', key: 'cloud' }, config: { region, s3Url: ep, s3ForcePathStyle: 'true' } } };
-        const bRes = await this._ensureCR(base, idt, 'apis/velero.io/v1/namespaces/velero', 'backupstoragelocations', 'samba-ad', bsl);
+        const bRes = await this._ensureCR(base, 'apis/velero.io/v1/namespaces/velero', 'backupstoragelocations', 'samba-ad', bsl);
         if (!bRes.ok) { if (isAuthFail(bRes.status, bRes.body)) { sessionExpiredMsg(status); return; } if (status) status.textContent = `전용 저장위치(BSL) 생성 실패 HTTP ${bRes.status}: ${(bRes.body || '').slice(0, 120)}`; return; }
       }
       const sched = { apiVersion: 'velero.io/v1', kind: 'Schedule', metadata: { name: 'samba-ad', namespace: 'velero', labels: { 'opensphere.io/plugin': 'samba-ad' } },
         spec: { schedule, template: { includedNamespaces: ['opensphere-foundation'], labelSelector: { matchLabels: { app: 'foundation-identity-samba' } }, defaultVolumesToFsBackup: true, storageLocation: bslName, ttl: '720h0m0s' } } };
-      const scRes = await this._ensureCR(base, idt, 'apis/velero.io/v1/namespaces/velero', 'schedules', 'samba-ad', sched);
+      const scRes = await this._ensureCR(base, 'apis/velero.io/v1/namespaces/velero', 'schedules', 'samba-ad', sched);
       if (!scRes.ok) { if (isAuthFail(scRes.status, scRes.body)) { sessionExpiredMsg(status); return; } if (status) status.textContent = `일정 등록 실패 HTTP ${scRes.status}${scRes.status === 403 ? ' (권한 없음 — velero 네임스페이스 쓰기 필요)' : ''}: ${(scRes.body || '').slice(0, 120)}`; return; }
       // FM에 백업 설정 기록(표시·정본).
       const fmBody = { spec: { parameters: { samba: { backup: { enabled: true, mode, schedule, dedicated } } } } };
-      await fetch(`${base}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
-        method: 'PATCH', headers: { 'content-type': 'application/merge-patch+json', 'x-os-id-token': idt }, body: JSON.stringify(fmBody),
+      await hostFetch(`${base}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
+        method: 'PATCH', headers: { 'content-type': 'application/merge-patch+json' }, body: JSON.stringify(fmBody),
       }).catch(() => {});
       if (status) status.textContent = `저장됨 — ${mode === 'dedicated' ? '전용' : '공용 기본'} 대상으로 일정 등록/갱신(${esc(schedule)}). 대상 BSL이 Available이어야 실제 백업이 저장됩니다.`;
       setTimeout(() => this._loadBackup(), 1500);
@@ -333,8 +320,6 @@ class SambaAdElement extends HTMLElement {
   // 지금 백업 — 일회성 Backup CR 생성(현재 모드의 BSL 사용). node-agent 파일시스템 백업으로 PVC 담김.
   async _backupNow() {
     const status = this.querySelector('#sc-bk-status');
-    if (tokenExpired()) { sessionExpiredMsg(status); return; }
-    const idt = osIdToken();
     const mode = (this.querySelector('#sc-bk-mode')?.value === 'dedicated') ? 'dedicated' : 'shared';
     const bslName = mode === 'dedicated' ? 'samba-ad' : 'default';
     const base = foundationApiBase();
@@ -343,8 +328,8 @@ class SambaAdElement extends HTMLElement {
       spec: { includedNamespaces: ['opensphere-foundation'], labelSelector: { matchLabels: { app: 'foundation-identity-samba' } }, defaultVolumesToFsBackup: true, storageLocation: bslName, ttl: '720h0m0s' } };
     if (status) status.textContent = '백업 요청 중…';
     try {
-      const r = await fetch(`${base}/api/k8s/apis/velero.io/v1/namespaces/velero/backups`, {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-os-id-token': idt }, body: JSON.stringify(bk),
+      const r = await hostFetch(`${base}/api/k8s/apis/velero.io/v1/namespaces/velero/backups`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bk),
       });
       if (!r.ok) { const t = await r.text().catch(() => ''); if (isAuthFail(r.status, t)) { sessionExpiredMsg(status); return; } if (status) status.textContent = `백업 요청 실패 HTTP ${r.status}: ${t.slice(0, 120)}`; return; }
       if (status) status.textContent = `백업 요청됨(${name}) — 진행 상태는 아래 표에서 갱신됩니다.`;
@@ -355,7 +340,7 @@ class SambaAdElement extends HTMLElement {
   async _load() {
     if (this._installRunning) return;
     try {
-      const res = await fetch(`${API_BASE}/api/samba`, { cache: 'no-store' });
+      const res = await hostFetch(`${API_BASE}/api/samba`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`samba: HTTP ${res.status}`);
       this.render(await res.json());
       this._bindLifecycleActions();
@@ -382,8 +367,6 @@ class SambaAdElement extends HTMLElement {
   // 설정 저장(도메인/replicas/storageClass/dnsForwarder) → FM/identity merge-patch(foundation 검증 경로).
   async _saveInstallInputs() {
     const status = this.querySelector('#sc-install-status');
-    if (tokenExpired()) { sessionExpiredMsg(status); return; }
-    const idt = osIdToken();
     const val = (id) => (this.querySelector(id)?.value ?? '').trim();
     const replicas = parseInt(val('#sc-install-replicas'), 10);
     const pass = val('#sc-install-pass');
@@ -403,9 +386,9 @@ class SambaAdElement extends HTMLElement {
     } } } };
     if (status) status.textContent = 'Saving install inputs...';
     try {
-      const fm = await fetch(`${base}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
+      const fm = await hostFetch(`${base}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/merge-patch+json', 'x-os-id-token': idt },
+        headers: { 'content-type': 'application/merge-patch+json' },
         body: JSON.stringify(cfg),
       });
       if (!fm.ok) {
@@ -415,9 +398,9 @@ class SambaAdElement extends HTMLElement {
         return;
       }
       if (pass) {
-        const srRaw = await fetch(`${base}/api/foundation/samba/bootstrap-secret`, {
+        const srRaw = await hostFetch(`${base}/api/foundation/samba/bootstrap-secret`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-os-id-token': idt },
+          headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ password: pass }),
         });
         const sr = { ok: srRaw.ok, status: srRaw.status, body: await srRaw.text().catch(() => '') };
@@ -435,8 +418,6 @@ class SambaAdElement extends HTMLElement {
   async _startInstall() {
     const status = this.querySelector('#sc-install-status');
     const logHost = this.querySelector('#sc-install-log');
-    if (tokenExpired()) { sessionExpiredMsg(status); return; }
-    const idt = osIdToken();
     const val = (id) => (this.querySelector(id)?.value ?? '').trim();
     const replicas = parseInt(val('#sc-install-replicas'), 10);
     const body = { spec: { desiredState: 'Installed', parameters: {
@@ -462,7 +443,7 @@ class SambaAdElement extends HTMLElement {
     };
     const checkJson = async (title, url, okText) => {
       add('info', title, '확인 중...');
-      const r = await fetch(url, { cache: 'no-store' });
+      const r = await hostFetch(url, { cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       await r.json();
       add('pass', title, okText || '정상');
@@ -482,9 +463,9 @@ class SambaAdElement extends HTMLElement {
       add('info', '검색 연결 확인', 'Manual Registry에 등록된 문서는 통합 검색과 OAA 지식 검색의 입력으로 사용됩니다.');
       add('pass', '검색 연결 확인', 'Manual/OAA 검색 연결 대상 확인');
       await checkJson('Operand 선언 확인', `${API_BASE}/operand/manifests`, 'PVC/Service/Deployment/NetworkPolicy 선언 렌더 확인');
-      const mr = await fetch(`${API_BASE}/metrics`, { cache: 'no-store' });
+      const mr = await hostFetch(`${API_BASE}/metrics`, { cache: 'no-store' });
       if (!mr.ok) throw new Error(`metrics HTTP ${mr.status}`);
-      const pr = await fetch(`${API_BASE}/api/metrics/range?q=${encodeURIComponent('samba_ad_up{plugin="samba-ad"}')}&minutes=10`, { cache: 'no-store' });
+      const pr = await hostFetch(`${API_BASE}/api/metrics/range?q=${encodeURIComponent('samba_ad_up{plugin="samba-ad"}')}&minutes=10`, { cache: 'no-store' });
       if (!pr.ok) throw new Error(`prometheus HTTP ${pr.status}`);
       const pj = await pr.json();
       const hasPromSample = (pj.data && Array.isArray(pj.data.result) && pj.data.result.some((s) => Array.isArray(s.values) && s.values.length > 0));
@@ -492,9 +473,9 @@ class SambaAdElement extends HTMLElement {
       add('pass', 'Metrics 연결 확인', '/metrics endpoint 및 kube-prometheus-stack sample 확인');
       await checkJson('Log 연결 확인', `${API_BASE}/api/logs?minutes=5`, 'Loki 기반 로그 조회 endpoint 응답 확인');
       add('info', 'FoundationModel 설치 선언', 'engines.samba=enabled 및 desiredState=Installed patch 요청');
-      const res = await fetch(`${foundationApiBase()}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
+      const res = await hostFetch(`${foundationApiBase()}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/merge-patch+json', 'x-os-id-token': idt },
+        headers: { 'content-type': 'application/merge-patch+json' },
         body: JSON.stringify(body),
       });
       if (!res.ok) {
@@ -506,7 +487,7 @@ class SambaAdElement extends HTMLElement {
       add('pass', 'FoundationModel 설치 선언', '저장 완료. control-plane reconcile 대기');
       let done = false;
       for (let i = 0; i < 40; i += 1) {
-        const r = await fetch(`${API_BASE}/api/samba`, { cache: 'no-store' });
+        const r = await hostFetch(`${API_BASE}/api/samba`, { cache: 'no-store' });
         const d = r.ok ? await r.json() : {};
         const pf = d.preflight || {};
         const w = d.workload || {};
@@ -529,8 +510,6 @@ class SambaAdElement extends HTMLElement {
 
   async _saveConfig() {
     const status = this.querySelector('#sc-cfg-status');
-    if (tokenExpired()) { sessionExpiredMsg(status); return; }
-    const idt = osIdToken();
     const val = (id) => (this.querySelector(id)?.value ?? '').trim();
     const replicas = parseInt(val('#sc-cfg-replicas'), 10);
     const body = { spec: { parameters: { samba: {
@@ -541,9 +520,9 @@ class SambaAdElement extends HTMLElement {
     } } } };
     if (status) status.textContent = '저장 중…';
     try {
-      const res = await fetch(`${foundationApiBase()}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
+      const res = await hostFetch(`${foundationApiBase()}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/merge-patch+json', 'x-os-id-token': idt },
+        headers: { 'content-type': 'application/merge-patch+json' },
         body: JSON.stringify(body),
       });
       if (!res.ok) {
@@ -1068,6 +1047,7 @@ const MANUAL_DOCS = [
 /** §9 계약: 셸 Extension Host가 호출하는 진입점 */
 export function activate(ctx) {
   API_BASE = ctx.api?.baseUrl ?? '';
+  API_FETCH = ctx.api?.fetch ?? null;
   if (!customElements.get(TAG)) customElements.define(TAG, SambaAdElement);
   // hostRef=foundation — registerPage 의도적 미호출(mainShell 1단 비노출, host가 안층 마운트).
   // 매뉴얼 기여(manual:contribute): 설치(로드)와 동시에 자기 매뉴얼을 단일 Manual Registry에 등록.
@@ -1080,4 +1060,7 @@ export function activate(ctx) {
   });
 }
 
-export function deactivate() { /* 호스트 마운트 해제는 host(Foundation) 소관 */ }
+export function deactivate() {
+  API_FETCH = null;
+  API_BASE = '';
+}

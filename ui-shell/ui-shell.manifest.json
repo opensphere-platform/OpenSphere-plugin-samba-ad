@@ -1,16 +1,18 @@
 {
-  "manifestVersion": 2,
+  "manifestVersion": 3,
   "kind": "plugin",
-  "hostRef": "foundation",
   "id": "samba-ad",
+  "hostRef": "foundation",
+  "hostApiVersion": "1.0.0",
+  "hostCompat": ">=1.0.0 <2.0.0",
   "version": "0.1.0",
   "title": "Samba-AD",
-  "description": "workspace/사원 디렉터리(Samba AD DC) 관리 plugin — Foundation(host) 안층 마운트, 콘솔 DUPA 신뢰체인 적재.",
+  "description": "Workspace directory management plugin mounted inside Foundation.",
   "entry": "ui-shell.plugin.js",
-  "entrySha256": "401629d6c8e10cf18eb104ee78491fe828ce1b1c4dca2305668653b189777bcf",
+  "entrySha256": "dfae5404fbea1a4cd2cc8cdf6358a03fb926a1ac1cddf3cdab89ebf6ac170464",
   "shellCompat": ">=0.2.0 <0.9.0",
+  "sdkVersion": "0.3.6",
   "permissions": [
-    "page:register",
     "api:proxy",
     "manual:contribute"
   ],
@@ -19,5 +21,46 @@
     "label": "Samba-AD"
   },
   "designSystem": "clarity",
-  "apiBase": "/api/plugins/samba-ad"
+  "apiBase": "/api/plugins/samba-ad",
+  "renderMode": "esm",
+  "contributions": {
+    "page": {
+      "enabled": false,
+      "reason": "Mounted inside the Foundation subShell"
+    },
+    "navigation": {
+      "enabled": false,
+      "mode": "none",
+      "reason": "Foundation owns the child navigation"
+    },
+    "api": {
+      "enabled": true,
+      "basePath": "/api/plugins/foundation"
+    },
+    "cli": {
+      "enabled": true,
+      "namespace": "ad",
+      "manifestPath": "/cli/manifest"
+    },
+    "manual": {
+      "enabled": true,
+      "sourceId": "plugin:samba-ad",
+      "mode": "runtime"
+    },
+    "search": {
+      "enabled": true,
+      "mode": "index"
+    },
+    "notification": {
+      "enabled": true,
+      "frontend": false,
+      "backend": true
+    },
+    "observability": {
+      "enabled": true,
+      "logs": true,
+      "metrics": true,
+      "traces": false
+    }
+  }
 }

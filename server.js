@@ -600,18 +600,19 @@ const server = http.createServer(async (req, res) => {
 });
 
 // ── 메시지 통합(2026-07-06) — plugin이 자기 이벤트를 콘솔 단일 인박스(audit bus)에 발행 ──
-// S2 배선: dupa-registry-controller /api/admin/events(X-Shell-Token=SHELL_SERVICE_TOKEN, podEnv 주입).
+// 배선: projected ServiceAccount token을 Controller가 TokenReview하고 source와 대조한다.
 // 전이 시에만 발행(dedup — 폴링 스팸 금지). source는 controller가 'ext:'로 강제 태깅(actor 위장 불가).
 // best-effort: 발행 실패해도 plugin 본기능 무관(경고 1회 후 억제).
 const CONTROLLER = process.env.OSP_CONTROLLER || 'http://dupa-registry-controller.opensphere-system.svc.cluster.local:8080';
-const SHELL_TOKEN = process.env.SHELL_SERVICE_TOKEN || '';
 let _notifyWarned = false;
 async function publishNotify(ev) {
-  if (!SHELL_TOKEN) { if (!_notifyWarned) { _notifyWarned = true; console.warn('[notify] SHELL_SERVICE_TOKEN 없음 — 이벤트 발행 생략'); } return; }
+  let workloadToken = '';
+  try { workloadToken = fs.readFileSync(`${SA}/token`, 'utf8').trim(); } catch { /* handled below */ }
+  if (!workloadToken) { if (!_notifyWarned) { _notifyWarned = true; console.warn('[notify] ServiceAccount token 없음 — 이벤트 발행 생략'); } return; }
   try {
     const res = await fetchT(`${CONTROLLER}/api/admin/events`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-shell-token': SHELL_TOKEN, 'x-opensphere-source': 'samba-ad' },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${workloadToken}`, 'x-opensphere-source': 'samba-ad' },
       body: JSON.stringify({ source: 'samba-ad', ...ev }),
     });
     if (!res.ok && !_notifyWarned) { _notifyWarned = true; console.warn(`[notify] 발행 실패 http=${res.status}(이후 억제)`); }
