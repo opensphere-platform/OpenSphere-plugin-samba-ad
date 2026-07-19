@@ -21,7 +21,7 @@ const KEYCLOAK = 'foundation-identity-keycloak';
 const CROSSPLANE_NS = process.env.CROSSPLANE_NS || 'crossplane-system';
 // self-contained(2026-07-06): operand(AD DC 실물) 배포 선언을 이 plugin이 소유한다.
 // control-plane은 GET /operand/manifests로 이 선언을 받아 SSA apply만 한다("내민 선언을 apply").
-const SAMBA_IMAGE = process.env.SAMBA_IMAGE || 'ghcr.io/opensphere-platform/mirror/samba-domain:20260706';
+const SAMBA_IMAGE = process.env.SAMBA_IMAGE || 'ghcr.io/opensphere-platform/mirror/samba-domain:20260701025204';
 const SAMBA_DATA_PVC = 'foundation-identity-samba-data';
 // ── 감사 Critical 시정(2026-07-06) — 도메인 부트스트랩 비밀번호를 소스/manifest/응답에 두지 않는다 ──
 // Foundation/Identity 소유 Secret(opensphere-foundation ns)에 보관하고, operand는 secretKeyRef로만 참조한다.

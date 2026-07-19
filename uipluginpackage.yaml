@@ -6,7 +6,7 @@ apiVersion: plugins.opensphere.io/v1alpha1
 kind: UIPluginPackage
 metadata:
   name: samba-ad
-  namespace: opensphere-system
+  namespace: opensphere-console
   labels:
     opensphere.io/host-ref: foundation
 spec:
@@ -16,21 +16,21 @@ spec:
   hostCompat: ">=1.0.0 <2.0.0"
   displayName: "Samba-AD"
   owner: platform-foundation
-  version: 0.1.0
+  version: 0.1.1-edge.2
   description: "Workspace directory management plugin for Samba AD DC, mounted inside Foundation."
   serviceAccountName: opensphere-plugin-samba-ad
   image:
-    repository: plugin-samba-ad
-    digest: sha256:07b1576b9942a5136d72a74e0c6abf582145a8653ddb718735f7ba65fa0e155e
+    repository: ghcr.io/opensphere-platform/opensphere-plugin-samba-ad
+    digest: sha256:cbf48c5e3e96b65657b722b36f4a0abe333ae9a7e86a9f3222c557bb31106bad
   nav:
     band: "Operate"
     label: "Samba-AD"
   manifest:
     path: /plugins/ui-shell.manifest.json
-    sha256: "e71e8df4249091cda5e07ecbd2e25a21add5df130a35f437aa4499e39b992ebd"
+    sha256: "66bef4ab2fe3f246570ed355084987a787d8b16a27f6e2ee65cba118dbe0eb72"
     signaturePath: /plugins/ui-shell.manifest.json.sig
   trust:
-    keyId: opensphere-plugins-v1
+    keyId: opensphere-plugins-v4
   shellCompat: ">=0.2.0 <0.9.0"
   permissions:
     - api:proxy
@@ -54,7 +54,7 @@ apiVersion: plugins.opensphere.io/v1alpha1
 kind: UIPluginRegistration
 metadata:
   name: samba-ad
-  namespace: opensphere-system
+  namespace: opensphere-console
 spec:
   packageRef:
     name: samba-ad

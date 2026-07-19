@@ -5,11 +5,11 @@
   "hostRef": "foundation",
   "hostApiVersion": "1.0.0",
   "hostCompat": ">=1.0.0 <2.0.0",
-  "version": "0.1.0",
+  "version": "0.1.1-edge.2",
   "title": "Samba-AD",
   "description": "Workspace directory management plugin mounted inside Foundation.",
   "entry": "ui-shell.plugin.js",
-  "entrySha256": "dfae5404fbea1a4cd2cc8cdf6358a03fb926a1ac1cddf3cdab89ebf6ac170464",
+  "entrySha256": "87073e654a518792aa4acd694b5fd2a836b0e876cb8a6f1e4f9baec314607a24",
   "shellCompat": ">=0.2.0 <0.9.0",
   "sdkVersion": "0.3.6",
   "permissions": [

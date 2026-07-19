@@ -4,7 +4,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: opensphere-plugin-samba-ad
-  namespace: opensphere-system
+  namespace: opensphere-console
 ---
 # 클러스터 스코프 읽기 — FoundationModel(identity 모델) + StorageClass(설정 폼 드롭다운 목록).
 apiVersion: rbac.authorization.k8s.io/v1
@@ -35,7 +35,7 @@ kind: ClusterRoleBinding
 metadata: { name: opensphere-plugin-samba-ad-fm-reader }
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: opensphere-plugin-samba-ad-fm-reader }
 subjects:
-  - { kind: ServiceAccount, name: opensphere-plugin-samba-ad, namespace: opensphere-system }
+  - { kind: ServiceAccount, name: opensphere-plugin-samba-ad, namespace: opensphere-console }
 ---
 # 실물(opensphere-foundation ns) 읽기 — samba/keycloak Deployment·pods·events.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -62,7 +62,7 @@ metadata:
   namespace: opensphere-foundation
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: opensphere-plugin-samba-ad-reader }
 subjects:
-  - { kind: ServiceAccount, name: opensphere-plugin-samba-ad, namespace: opensphere-system }
+  - { kind: ServiceAccount, name: opensphere-plugin-samba-ad, namespace: opensphere-console }
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -82,4 +82,4 @@ metadata:
   namespace: monitoring
 roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: opensphere-plugin-samba-ad-grafana-reader }
 subjects:
-  - { kind: ServiceAccount, name: opensphere-plugin-samba-ad, namespace: opensphere-system }
+  - { kind: ServiceAccount, name: opensphere-plugin-samba-ad, namespace: opensphere-console }

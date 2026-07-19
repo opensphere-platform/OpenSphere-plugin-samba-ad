@@ -11,7 +11,7 @@
 const TAG = 'osp-samba-ad';
 let API_BASE = '';
 let API_FETCH = null;
-const SAMBA_LOGO_URL = 'https://cdn.statically.io/gh/openplatform-labs/images@main/logos/samba-server.svg';
+const SAMBA_LOGO_URL = 'https://logos.opl.io.kr/i/samba-server';
 
 // 설정 저장 = FM/identity.spec.parameters.samba(foundation 도메인 자원) → foundation host의 검증된 write-path
 // (Main Shell이 ctx.api.fetch에 인증을 주입하고 server.js가 검증) 재사용. plugin은 폼·스키마·operand 렌더를 소유하되,
@@ -552,7 +552,7 @@ class SambaAdElement extends HTMLElement {
   stage() {
     try {
       const parts = location.pathname.split('/').filter(Boolean);
-      const i = parts.indexOf('samba');
+      const i = parts.indexOf('addc');
       const s = i >= 0 ? parts[i + 1] : '';
       return s === 'preflight' || s === 'install' || s === 'manage' ? s : 'auto';
     } catch { return 'auto'; }
@@ -560,31 +560,56 @@ class SambaAdElement extends HTMLElement {
 
   stagePath(stage) {
     const suffix = stage === 'preflight' ? '' : `/${stage}`;
-    return `/p/foundation/samba${suffix}${location.search}${location.hash}`;
+    return `/p/foundation/addc${suffix}${location.search}${location.hash}`;
   }
 
   manageTab() {
     try {
       const parts = location.pathname.split('/').filter(Boolean);
-      const i = parts.indexOf('samba');
+      const i = parts.indexOf('addc');
       const t = i >= 0 && parts[i + 1] === 'manage' ? (parts[i + 2] || '') : '';
-      return ['overview', 'config', 'backup', 'metrics', 'logs', 'events'].includes(t) ? t : 'overview';
+      return ['overview', 'dependency', 'plan', 'topology', 'consumers', 'protection', 'events', 'upgrade', 'documentation'].includes(t) ? t : 'overview';
     } catch { return 'overview'; }
   }
 
   managePath(tab) {
-    return `/p/foundation/samba/manage/${tab}${location.search}${location.hash}`;
+    return `/p/foundation/addc/manage/${tab}${location.search}${location.hash}`;
   }
 
   manageNav(active) {
     const tabs = [
-      ['overview', 'Overview'], ['config', 'Config'], ['backup', 'Backup'],
-      ['metrics', 'Metrics'], ['logs', 'Logs'], ['events', 'Events'],
+      ['overview', 'Overview'], ['dependency', '실행 기반'], ['plan', '설치·운영 구성'],
+      ['topology', 'Topology'], ['consumers', 'Consumers'], ['protection', 'Backup & Security'],
+      ['events', 'Events'], ['upgrade', 'Upgrade'], ['documentation', 'Documentation'],
     ];
-    return `<nav class="subnav" aria-label="Samba-AD manage sections">
-      <ul class="nav" role="tablist">${tabs.map(([id, label]) => `
-        <li class="nav-item" role="presentation"><a href="${esc(this.managePath(id))}" class="nav-link ${active === id ? 'active' : ''}" role="tab" aria-selected="${active === id ? 'true' : 'false'}" data-sc-tab="${esc(id)}">${esc(label)}</a></li>`).join('')}</ul>
+    return `<nav class="pfs-plugin-tabs" aria-label="Samba-AD plugin menu" role="tablist">
+      ${tabs.map(([id, label]) => `<a href="${esc(this.managePath(id))}" class="pfs-plugin-tab ${active === id ? 'active' : ''}" role="tab" aria-selected="${active === id ? 'true' : 'false'}" data-sc-tab="${esc(id)}">${esc(label)}</a>`).join('')}
     </nav>`;
+  }
+
+  pluginHeader(d, lifecycle, description) {
+    const image = String(d?.workload?.image || '');
+    const version = image ? image.split('@')[0].split(':').pop() : 'bundle-pinned';
+    const profile = lifecycle === 'Manage' ? 'managed' : 'installation';
+    const namespace = d?.meta?.ns || 'opensphere-foundation';
+    const lifecycleClass = lifecycle === 'Manage' ? 'label-success'
+      : (lifecycle === 'Install' ? 'label-info' : 'label-warning');
+    return `<section class="pfs-plugin-head" aria-labelledby="samba-plugin-page-title">
+      <div class="pfs-plugin-brand">
+        <div class="pfs-plugin-logo"><img src="${SAMBA_LOGO_URL}" alt="Samba-AD"></div>
+        <div>
+          <span class="vl-eyebrow">PFS · identity.directory.ad</span>
+          <h1 id="samba-plugin-page-title">Samba-AD</h1>
+          <p>${esc(description)}</p>
+        </div>
+      </div>
+      <dl class="pfs-plugin-release">
+        <div><dt>Lifecycle</dt><dd><span class="label ${lifecycleClass}">${esc(lifecycle)}</span></dd></div>
+        <div><dt>Version</dt><dd>${esc(version)}</dd></div>
+        <div><dt>Profile</dt><dd>${esc(profile)}</dd></div>
+        <div><dt>Namespace</dt><dd class="os-mono">${esc(namespace)}</dd></div>
+      </dl>
+    </section>`;
   }
   lifecycleStage(pf) {
     const state = pf?.installState || 'Blocked';
@@ -702,11 +727,17 @@ class SambaAdElement extends HTMLElement {
       ? '<button class="btn btn-primary btn-sm" data-sc-action="install">Continue to Install inputs</button>'
       : '<button class="btn btn-primary btn-sm" disabled>Resolve BLOCK items first</button>';
     this.innerHTML = `
-      <div class="os-title-row"><h2 class="os-h2">${sambaLogo()}Samba-AD Preflight ${this.lifecycleBadge(pf)}</h2></div>
-      <p class="os-sub">Foundation validates the plugin package and the installation process before the Samba-AD operand is created.</p>
+      <section class="pgp-page-frame">
+        ${this.pluginHeader(d, 'Preflight', 'Foundation validates the signed plugin package, dependencies, and installation contract before creating the Samba-AD operand.')}
+      </section>
       ${this.preflight(d)}
       <div class="card"><div class="card-header">Foundation installation process</div><div class="card-block">
         ${this.foundationProcess(d)}
+      </div></div>
+      <div class="card"><div class="card-block">
+        <h3 class="card-title">Documentation</h3>
+        <p class="os-sub">설치 전 BLOCK을 해결하는 단계에서도 plugin 소유 한글 안내서와 공식 문서를 바로 확인할 수 있습니다. Manual Registry 등록은 설치 여부와 무관하게 plugin 활성화 시 완료됩니다.</p>
+        <div class="os-actions"><a class="btn btn-sm btn-primary" href="/manual?doc=${encodeURIComponent('plugin:samba-ad/operations')}">한글 안내서 열기</a><a class="btn btn-sm" href="https://www.samba.org/samba/docs/" target="_blank" rel="noreferrer">Samba 공식 문서</a></div>
       </div></div>
       <div class="card"><div class="card-block">
         <h3 class="card-title">Next</h3>
@@ -723,8 +754,9 @@ class SambaAdElement extends HTMLElement {
       .replace('id="sc-cfg-sc"', 'id="sc-install-sc"')
       .replace('class="os-filter"', 'class="clr-select"');
     this.innerHTML = `
-      <div class="os-title-row"><h2 class="os-h2">${sambaLogo()}Samba-AD Install <span class="label label-info">Day-1</span></h2></div>
-      <p class="os-sub">Preflight 이후 Samba-AD operand 선언을 control-plane이 적용하는 설치 단계입니다.</p>
+      <section class="pgp-page-frame">
+        ${this.pluginHeader(d, 'Install', 'Preflight 이후 관리자가 설치 입력을 확정하고 Foundation control-plane이 Samba-AD operand 선언을 적용합니다.')}
+      </section>
       <div class="alert ${installed ? 'alert-info' : (pf.blockers === 0 ? 'alert-success' : 'alert-danger')}"><div class="alert-items">
         <div class="alert-item static"><span class="alert-text">${installed
           ? 'Samba-AD operand는 이미 설치되어 있습니다. 설치 후 운영은 Manage 단계에서 확인하세요.'
@@ -882,7 +914,12 @@ class SambaAdElement extends HTMLElement {
       </div>
     </div></div>`;
 
-    const overviewHtml = `${notDeployed}${relationHtml}<div class="clr-row">
+    const overviewSteps = `<div class="pgp-steps">
+      <button class="pgp-step done" type="button" data-sc-tab="dependency"><span class="pgp-step-n">1</span><span><b>실행 기반 준비</b><small>서명·권한·Claim/Binding·스토리지</small></span></button>
+      <button class="pgp-step done" type="button" data-sc-tab="plan"><span class="pgp-step-n">2</span><span><b>서비스 구성</b><small>realm·replica·DNS·영구 저장소</small></span></button>
+      <button class="pgp-step ${w.ready ? 'done' : 'current'}" type="button" data-sc-tab="topology"><span class="pgp-step-n">3</span><span><b>운영 관리</b><small>상태·소비자·보호·이벤트</small></span></button>
+    </div>`;
+    const overviewHtml = `${overviewSteps}${notDeployed}${relationHtml}<div class="clr-row">
       ${this.card(`Directory workload <span class="os-mono">${esc('foundation-identity-samba')}</span>`, `
         <table class="table"><tbody>${this.kv([
           ['Status', `<span class="label ${phasePill}">${esc(phase)}</span> ${w.found ? esc(`${w.readyReplicas}/${w.replicas} ready`) : ''}`],
@@ -960,12 +997,44 @@ class SambaAdElement extends HTMLElement {
     const logsHtml = `<div class="os-sech">Logs <span class="os-sub">Loki / samba pod stdout / last 60 minutes</span></div><div id="sc-logs" class="vl-log"><div class="vl-log-empty">Loading logs...</div></div>`;
     const eventsHtml = `<div class="os-sech">Events <span class="os-sub">Kubernetes events</span></div>${eventRows ? `<table class="table"><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Time</th></tr></thead><tbody>${eventRows}</tbody></table>` : '<p class="os-sub">No recent events.</p>'}`;
 
-    const content = { overview: overviewHtml, config: configHtml, backup: backupHtml, metrics: metricsHtml, logs: logsHtml, events: eventsHtml }[activeTab] || overviewHtml;
+    const dependencyHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Internal dependency</span><h2>실행 기반</h2></div>${this.lifecycleBadge(d.preflight)}</div>${this.preflight(d)}<div class="card"><div class="card-header">Foundation installation process</div><div class="card-block">${this.foundationProcess(d)}</div></div></div>`;
+    const topologyHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Runtime</span><h2>Topology & workloads</h2></div><span class="label ${phasePill}">${esc(phase)}</span></div>${notDeployed}${overviewHtml}${metricsHtml}</div>`;
+    const consumersHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Northbound contract</span><h2>Consumers</h2></div></div>${relationHtml}<div class="alert alert-info"><div class="alert-items"><div class="alert-item static"><span class="alert-text">소비자는 bind password를 직접 전달받지 않고 IdentityDirectoryClaim/Binding의 endpointRef·secretRef·policyRef를 통해 연결합니다.</span></div></div></div></div>`;
+    const protectionHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Protection policy</span><h2>Backup & Security</h2></div></div>${backupHtml}<div class="card"><div class="card-header">Security boundary</div><div class="card-block"><table class="table"><tbody>${this.kv([
+      ['Exposure', 'ClusterIP only · external LDAP/SMB exposure prohibited by default'],
+      ['Credential authority', '<span class="os-mono">foundation-identity-samba-creds</span> Secret'],
+      ['Directory mutation', 'samba-tool / RSAT · Console command mutation prohibited'],
+      ['Backup', 'Velero Schedule + external S3 compatible target'],
+    ])}</tbody></table></div></div></div>`;
+    const upgradeHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Controlled lifecycle</span><h2>Upgrade & rollback</h2></div><span class="label label-warning">승인 필요</span></div><p>서명 BOM의 channel image digest, Samba schema 호환성, domain database 백업과 복원 근거를 검증한 뒤 FoundationModel desired state를 변경합니다.</p><table class="table"><tbody>${this.kv([
+      ['Current image', `<span class="os-mono">${esc(w.image || 'not deployed')}</span>`],
+      ['Upgrade unit', 'signed image digest + domain schema + compatibility matrix'],
+      ['Rollback evidence', 'Velero backup + isolated restore verification'],
+      ['Write path', '<span class="os-mono">FoundationModel/identity → control-plane SSA</span>'],
+    ])}</tbody></table><div class="alert alert-warning"><div class="alert-items"><div class="alert-item static"><span class="alert-text">PVC 또는 domain database를 삭제하는 rollback은 허용하지 않습니다. major 변경은 별도 migration 계획이 필요합니다.</span></div></div></div></div>`;
+    const documentationHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Console Manual Registry</span><h2>Documentation</h2></div><span class="label label-success">자동 등록</span></div><p>이 plugin이 소유한 한글 설치·운영 안내서는 plugin 활성화 시 Console Manual Registry와 통합 검색에 자동 등록됩니다.</p><table class="table"><tbody>${this.kv([
+      ['Document ID', '<span class="os-mono">plugin:samba-ad/operations</span>'],
+      ['Route', '<span class="os-mono">/p/foundation/addc</span>'],
+      ['Authority', 'Tier 3 · plugin-owned operating reference'],
+    ])}</tbody></table><div class="os-actions"><a class="btn btn-sm btn-primary" href="/manual?doc=${encodeURIComponent('plugin:samba-ad/operations')}">한글 안내서 열기</a><a class="btn btn-sm" href="https://www.samba.org/samba/docs/" target="_blank" rel="noreferrer">Samba 공식 문서</a></div></div>`;
+
+    const content = {
+      overview: overviewHtml,
+      dependency: dependencyHtml,
+      plan: configHtml,
+      topology: topologyHtml,
+      consumers: consumersHtml,
+      protection: protectionHtml,
+      events: `${eventsHtml}${logsHtml}`,
+      upgrade: upgradeHtml,
+      documentation: documentationHtml,
+    }[activeTab] || overviewHtml;
 
     this.innerHTML = `
-      <div class="os-title-row"><h2 class="os-h2">${sambaLogo()}Samba-AD <span class="label label-info">plugin</span> <span class="label ${phasePill}">${esc(phase)}</span></h2></div>
-      <p class="os-sub">Workforce directory / Samba Active Directory DC / realm ${esc(realm)} / ns ${esc(d.meta?.ns)} / served by ${esc(d.meta?.servedBy)}</p>
-      ${this.manageNav(activeTab)}
+      <section class="pgp-page-frame">
+        ${this.pluginHeader(d, 'Manage', `Workforce directory / Samba Active Directory DC / realm ${realm} / served by ${d.meta?.servedBy || 'plugin backend'}`)}
+        ${this.manageNav(activeTab)}
+      </section>
       ${content}`;
   }
 
@@ -978,7 +1047,7 @@ const MANUAL_DOCS = [
     title: 'Samba-AD 디렉터리 운영 매뉴얼',
     documentType: 'reference',
     tags: ['plugin', 'foundation', 'identity', 'samba', 'directory'],
-    route: '/p/foundation/samba',
+    route: '/p/foundation/addc',
     sourcePath: 'samba-ad/operations',
     content: [
       '# Samba-AD 디렉터리 운영',
@@ -1003,7 +1072,7 @@ const MANUAL_DOCS = [
       '- 단일 DC(replicas 1, Recreate) — pod IP 변경 시 DNS 자기등록 특성의 dev 수용.',
       '',
       '## Preflight',
-      '- Preflight/Install/Manage는 사용자가 임의로 오가는 탭이 아니라 Samba-AD operand lifecycle 상태다. 기본 `/p/foundation/samba` 진입은 현재 lifecycle 상태로 해석한다.',
+      '- Preflight/Install/Manage는 사용자가 임의로 오가는 탭이 아니라 Samba-AD operand lifecycle 상태다. 기본 `/p/foundation/addc` 진입은 현재 lifecycle 상태로 해석한다.',
       '- 설치 완료 후에는 Install로 역진하지 않는다. 과거 단계 URL을 열어도 상태 확인 또는 현재 Manage 단계로 유도하는 용도이며, 운영 조작은 Manage에서 수행한다.',
       '- Preflight는 plugin 이미지 배포 전 점검이 아니라, plugin 컨테이너가 뜬 뒤 Samba-AD operand 배포 전에 수행하는 day-0 점검이다.',
       '- UI 상단 Preflight 섹션과 `os ad preflight`가 같은 판정 모델을 사용한다.',

@@ -5,13 +5,13 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: samba-ad
-  namespace: opensphere-system
+  namespace: opensphere-console
   labels: { app: samba-ad }
 spec:
   selector:
     matchLabels: { opensphere.io/dupa-plugin: samba-ad }  # DUPA controller가 만든 plugin Service 라벨
   namespaceSelector:
-    matchNames: [opensphere-system]
+    matchNames: [opensphere-console]
   endpoints:
     - targetPort: 8080
       path: /metrics
