@@ -22,6 +22,13 @@ try { execFileSync(process.execPath, ['--check', abs('server.js')]); check('synt
 catch (e) { check('syntax: server.js', false, String(e.stderr || e).slice(0, 120)); }
 try { execFileSync(process.execPath, ['--check', '--input-type=module'], { input: read('ui-shell/ui-shell.plugin.js') }); check('syntax: ui-shell.plugin.js (ESM)', true); }
 catch (e) { check('syntax: ui-shell.plugin.js', false, String(e.stderr || e).slice(0, 120)); }
+const uiShell = read('ui-shell/ui-shell.plugin.js').toString();
+check('ui: canonical addc tab routes (no lifecycle URL branch)',
+  /return `\/p\/foundation\/addc\$\{suffix\}/.test(uiShell) && !uiShell.includes('/p/foundation/addc/manage/'));
+check('ui: common header and tabs persist across lifecycle states',
+  /renderLifecycle\(d, lifecycle\)/.test(uiShell) && /pluginHeader\(d,[\s\S]{0,240}manageNav\(activeTab\)/.test(uiShell));
+check('ui: install completion returns to canonical overview',
+  uiShell.includes("this.managePath('overview')") && !uiShell.includes('stageUrl('));
 
 // ② entrySha256 == sha256(entry)
 const manifest = JSON.parse(read('ui-shell/ui-shell.manifest.json').toString());
