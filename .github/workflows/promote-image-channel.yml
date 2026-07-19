@@ -53,8 +53,8 @@ jobs:
           test "${#REASON}" -ge 12
       - uses: imjasonh/setup-crane@v0.4
       - name: Login to GHCR
-        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
-        run: crane auth login ghcr.io -u "${{ github.actor }}" -p "$GH_TOKEN"
+        env: { GHCR_TOKEN: "${{ secrets.GHCR_PAT }}" }
+        run: crane auth login ghcr.io -u "opensphere-platform" -p "$GHCR_TOKEN"
       - id: verify
         name: Verify immutable digest, architectures and attestations
         env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }

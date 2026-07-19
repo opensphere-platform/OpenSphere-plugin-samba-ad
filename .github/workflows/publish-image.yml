@@ -64,7 +64,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PAT }}
       - id: meta
         uses: docker/metadata-action@v5
         with:
@@ -111,11 +111,10 @@ jobs:
       - uses: imjasonh/setup-crane@v0.4
       - name: Advance edge and verify
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_TOKEN: ${{ secrets.GHCR_PAT }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          crane auth login ghcr.io -u "${{ github.actor }}" -p "$GH_TOKEN"
+          crane auth login ghcr.io -u "opensphere-platform" -p "$GHCR_TOKEN"
           repository=ghcr.io/opensphere-platform/opensphere-plugin-samba-ad
           crane tag "$repository@$DIGEST" edge
           test "$(crane digest "$repository:edge")" = "$DIGEST"
-
