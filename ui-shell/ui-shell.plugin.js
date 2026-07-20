@@ -585,8 +585,8 @@ class SambaAdElement extends HTMLElement {
       ['backups', 'Backups', true], ['events', 'Events', true], ['claims', 'Claims', true],
       ['upgrade', 'Upgrade', false], ['documentation', 'Documentation', false],
     ];
-    return `<nav class="pfs-plugin-tabs" aria-label="Samba-AD plugin menu" role="tablist">
-      ${tabs.map(([id, label, requiresWorkload]) => `<button type="button" class="pfs-plugin-tab ${active === id ? 'active' : ''}" role="tab" aria-selected="${active === id ? 'true' : 'false'}" data-sc-tab="${esc(id)}"${requiresWorkload && !workloadReady ? ' disabled' : ''}>${esc(label)}</button>`).join('')}
+    return `<nav class="pfs-plugin-tabs" aria-label="Samba-AD plugin menu" role="tablist" aria-orientation="horizontal">
+      ${tabs.map(([id, label, requiresWorkload]) => { const disabled = requiresWorkload && !workloadReady; return `<button type="button" class="pfs-plugin-tab ${active === id ? 'active' : ''}" role="tab" aria-selected="${active === id ? 'true' : 'false'}" tabindex="${active === id ? '0' : '-1'}" aria-label="${esc(disabled ? `${label} — AD DC 생성 후 사용 가능` : label)}"${disabled ? ' title="AD DC 생성 후 사용 가능"' : ''} data-sc-tab="${esc(id)}"${disabled ? ' disabled' : ''}>${esc(label)}</button>`; }).join('')}
     </nav>`;
   }
 
@@ -635,6 +635,27 @@ class SambaAdElement extends HTMLElement {
         e.preventDefault();
         history.pushState(history.state, '', this.managePath(el.getAttribute('data-sc-tab') || 'overview'));
         this._load().then(() => this._afterRenderLoads());
+      });
+    });
+    this.querySelectorAll('[role="tab"][data-sc-tab]').forEach((el) => {
+      el.addEventListener('keydown', (e) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+        const enabled = [...this.querySelectorAll('[role="tab"][data-sc-tab]:not(:disabled)')];
+        const current = enabled.indexOf(el);
+        if (current < 0 || !enabled.length) return;
+        let next = current;
+        if (e.key === 'ArrowRight') next = (current + 1) % enabled.length;
+        if (e.key === 'ArrowLeft') next = (current - 1 + enabled.length) % enabled.length;
+        if (e.key === 'Home') next = 0;
+        if (e.key === 'End') next = enabled.length - 1;
+        e.preventDefault();
+        const target = enabled[next];
+        const tab = target.getAttribute('data-sc-tab') || 'overview';
+        history.pushState(history.state, '', this.managePath(tab));
+        this._load().then(() => {
+          this._afterRenderLoads();
+          this.querySelector(`[role="tab"][data-sc-tab="${tab}"]`)?.focus();
+        });
       });
     });
   }

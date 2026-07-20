@@ -5,7 +5,7 @@
   "hostRef": "foundation",
   "hostApiVersion": "1.0.0",
   "hostCompat": ">=1.0.0 <2.0.0",
-  "version": "0.1.1-edge.6",
+  "version": "0.1.1-edge.7",
   "title": "Samba-AD",
   "description": "Workspace directory management plugin mounted inside Foundation.",
   "entry": "ui-shell.plugin.js",

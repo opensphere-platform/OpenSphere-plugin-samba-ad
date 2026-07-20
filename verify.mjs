@@ -42,6 +42,10 @@ check('ui: PostgreSQL reference page shell and tab spine are reused exactly',
   /\['cluster', 'Cluster plan'/.test(uiShell) && /\['configuration', 'Configuration'/.test(uiShell) &&
   /\['directory', 'Directory & Roles'/.test(uiShell) && /\['backups', 'Backups'/.test(uiShell) &&
   /\['claims', 'Claims'/.test(uiShell) && /requiresWorkload && !workloadReady/.test(uiShell));
+check('ui: tablist exposes roving focus and keyboard navigation',
+  /role="tablist" aria-orientation="horizontal"/.test(uiShell) && /aria-selected=/.test(uiShell) &&
+  /tabindex=/.test(uiShell) && /ArrowRight/.test(uiShell) && /ArrowLeft/.test(uiShell) &&
+  /e\.key === 'Home'/.test(uiShell) && /e\.key === 'End'/.test(uiShell));
 
 // ② entrySha256 == sha256(entry)
 const manifest = JSON.parse(read('ui-shell/ui-shell.manifest.json').toString());
