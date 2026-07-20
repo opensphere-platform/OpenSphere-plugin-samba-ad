@@ -63,6 +63,24 @@ jobs:
             ghcr.io/opensphere-platform/opensphere-plugin-samba-ad \
             "${{ inputs.source_channel }}" "${{ inputs.expected_source_revision }}" \
             opensphere-platform/OpenSphere-plugin-samba-ad true digest
+      - name: Verify immutable KST release tag exists
+        env:
+          DIGEST: ${{ steps.verify.outputs.digest }}
+        run: |
+          set -euo pipefail
+          repository=ghcr.io/opensphere-platform/opensphere-plugin-samba-ad
+          found=false
+          while IFS= read -r tag; do
+            [[ "$tag" =~ ^[0-9]{12}$ ]] || continue
+            if [[ "$(crane digest "$repository:$tag")" = "$DIGEST" ]]; then
+              found=true
+              break
+            fi
+          done < <(crane ls "$repository")
+          if [[ "$found" != true ]]; then
+            echo "$repository@$DIGEST has no immutable yyyyMMddHHmm release tag" >&2
+            exit 1
+          fi
       - name: Candidate/stable vulnerability and license gate
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0; SHA-pinned after 2026 incident
         with:

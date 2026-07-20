@@ -114,7 +114,19 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GHCR_PAT }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
+          set -euo pipefail
           crane auth login ghcr.io -u "opensphere-platform" -p "$GHCR_TOKEN"
           repository=ghcr.io/opensphere-platform/opensphere-plugin-samba-ad
+          release_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          release_tag="$(TZ=Asia/Seoul date -d "@$release_epoch" +%Y%m%d%H%M)"
+          [[ "$release_tag" =~ ^[0-9]{12}$ ]]
+          existing="$(crane digest "$repository:$release_tag" 2>/dev/null || true)"
+          if [[ -n "$existing" && "$existing" != "$DIGEST" ]]; then
+            echo "Immutable release tag collision: $repository:$release_tag is $existing, expected $DIGEST" >&2
+            exit 1
+          fi
+          crane tag "$repository@$DIGEST" "$release_tag"
+          test "$(crane digest "$repository:$release_tag")" = "$DIGEST"
           crane tag "$repository@$DIGEST" edge
           test "$(crane digest "$repository:edge")" = "$DIGEST"
+          echo "- \`$repository:$release_tag\` → \`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
