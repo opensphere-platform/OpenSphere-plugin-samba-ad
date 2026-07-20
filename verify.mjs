@@ -26,7 +26,7 @@ const uiShell = read('ui-shell/ui-shell.plugin.js').toString();
 check('ui: canonical addc tab routes (no lifecycle URL branch)',
   /return `\/p\/foundation\/addc\$\{suffix\}/.test(uiShell) && !uiShell.includes('/p/foundation/addc/manage/'));
 check('ui: common header and tabs persist across lifecycle states',
-  /renderLifecycle\(d, lifecycle\)/.test(uiShell) && /pluginHeader\(d,[\s\S]{0,240}manageNav\(activeTab\)/.test(uiShell));
+  /renderLifecycle\(d, lifecycle\)/.test(uiShell) && /pluginHeader\(d,[\s\S]{0,260}manageNav\(activeTab, d\)/.test(uiShell));
 check('ui: install completion returns to canonical overview',
   uiShell.includes("this.managePath('overview')") && !uiShell.includes('stageUrl('));
 check('ui: retained custom element reads refreshed host capability context',
@@ -36,6 +36,12 @@ check('ui: PostgreSQL reference overview structure is reused exactly',
   /class="pgp-steps"/.test(uiShell) && /class="pgp-dashboard"/.test(uiShell) &&
   /<h2>Package readiness<\/h2>/.test(uiShell) && /<h2>Directory health<\/h2>/.test(uiShell) &&
   /<h2>Operations policy<\/h2>/.test(uiShell) && /class="pgp-description"/.test(uiShell));
+check('ui: PostgreSQL reference page shell and tab spine are reused exactly',
+  /class="vl-back"/.test(uiShell) && /class="pgp-page-frame"/.test(uiShell) &&
+  /\['overview', 'Overview'/.test(uiShell) && /\['operator', 'Operator'/.test(uiShell) &&
+  /\['cluster', 'Cluster plan'/.test(uiShell) && /\['configuration', 'Configuration'/.test(uiShell) &&
+  /\['directory', 'Directory & Roles'/.test(uiShell) && /\['backups', 'Backups'/.test(uiShell) &&
+  /\['claims', 'Claims'/.test(uiShell) && /requiresWorkload && !workloadReady/.test(uiShell));
 
 // ② entrySha256 == sha256(entry)
 const manifest = JSON.parse(read('ui-shell/ui-shell.manifest.json').toString());

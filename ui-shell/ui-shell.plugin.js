@@ -559,7 +559,7 @@ class SambaAdElement extends HTMLElement {
   }
 
   stagePath(stage) {
-    const tab = stage === 'preflight' ? 'dependency' : (stage === 'install' ? 'plan' : 'overview');
+    const tab = stage === 'preflight' ? 'operator' : (stage === 'install' ? 'cluster' : 'overview');
     return this.managePath(tab);
   }
 
@@ -568,7 +568,7 @@ class SambaAdElement extends HTMLElement {
       const parts = location.pathname.split('/').filter(Boolean);
       const i = parts.indexOf('addc');
       const t = i >= 0 ? (parts[i + 1] || '') : '';
-      return ['overview', 'dependency', 'plan', 'topology', 'consumers', 'protection', 'events', 'upgrade', 'documentation'].includes(t) ? t : 'overview';
+      return ['overview', 'operator', 'cluster', 'topology', 'configuration', 'directory', 'backups', 'events', 'claims', 'upgrade', 'documentation'].includes(t) ? t : 'overview';
     } catch { return 'overview'; }
   }
 
@@ -577,14 +577,16 @@ class SambaAdElement extends HTMLElement {
     return `/p/foundation/addc${suffix}${location.search}${location.hash}`;
   }
 
-  manageNav(active) {
+  manageNav(active, d) {
+    const workloadReady = !!d?.workload?.found;
     const tabs = [
-      ['overview', 'Overview'], ['dependency', '실행 기반'], ['plan', '설치·운영 구성'],
-      ['topology', 'Topology'], ['consumers', 'Consumers'], ['protection', 'Backup & Security'],
-      ['events', 'Events'], ['upgrade', 'Upgrade'], ['documentation', 'Documentation'],
+      ['overview', 'Overview', false], ['operator', 'Operator', false], ['cluster', 'Cluster plan', false],
+      ['topology', 'Topology', true], ['configuration', 'Configuration', true], ['directory', 'Directory & Roles', true],
+      ['backups', 'Backups', true], ['events', 'Events', true], ['claims', 'Claims', true],
+      ['upgrade', 'Upgrade', false], ['documentation', 'Documentation', false],
     ];
     return `<nav class="pfs-plugin-tabs" aria-label="Samba-AD plugin menu" role="tablist">
-      ${tabs.map(([id, label]) => `<a href="${esc(this.managePath(id))}" class="pfs-plugin-tab ${active === id ? 'active' : ''}" role="tab" aria-selected="${active === id ? 'true' : 'false'}" data-sc-tab="${esc(id)}">${esc(label)}</a>`).join('')}
+      ${tabs.map(([id, label, requiresWorkload]) => `<button type="button" class="pfs-plugin-tab ${active === id ? 'active' : ''}" role="tab" aria-selected="${active === id ? 'true' : 'false'}" data-sc-tab="${esc(id)}"${requiresWorkload && !workloadReady ? ' disabled' : ''}>${esc(label)}</button>`).join('')}
     </nav>`;
   }
 
@@ -839,12 +841,12 @@ class SambaAdElement extends HTMLElement {
     const cfg = d.config || {};
     const backup = d.backup || {};
     const monitoring = (pf.checks || []).some((c) => c.id === 'metrics' && c.state === 'pass');
-    const nextTab = !prerequisiteReady ? 'dependency' : (!created ? 'plan' : 'topology');
+    const nextTab = !prerequisiteReady ? 'operator' : (!created ? 'cluster' : 'topology');
     const nextLabel = !prerequisiteReady ? '전제조건 확인' : (!created ? 'AD DC 구성' : '상태 새로고침');
     return `
       <section class="pgp-steps" aria-label="Samba-AD plugin 설치 단계">
-        <button class="pgp-step ${prerequisiteReady ? 'done' : 'current'}" type="button" data-sc-tab="dependency"><span class="pgp-step-n">1</span><span><b>실행 기반 준비</b><small>${prerequisiteReady ? '필수 계약 Ready' : '서명·권한·Claim/Binding 확인 필요'}</small></span></button>
-        <button class="pgp-step ${created ? 'done' : (prerequisiteReady ? 'current' : '')}" type="button" data-sc-tab="plan"><span class="pgp-step-n">2</span><span><b>AD DC 생성</b><small>${created ? 'Directory operand 생성됨' : 'realm·replica·DNS·스토리지 구성'}</small></span></button>
+        <button class="pgp-step ${prerequisiteReady ? 'done' : 'current'}" type="button" data-sc-tab="operator"><span class="pgp-step-n">1</span><span><b>Operator 준비</b><small>${prerequisiteReady ? 'Foundation installer Ready' : '설치 및 계약 확인 필요'}</small></span></button>
+        <button class="pgp-step ${created ? 'done' : (prerequisiteReady ? 'current' : '')}" type="button" data-sc-tab="cluster"><span class="pgp-step-n">2</span><span><b>Cluster 생성</b><small>${created ? 'AD DC operand 생성됨' : '토폴로지·스토리지·백업 구성'}</small></span></button>
         <button class="pgp-step ${ready ? 'done' : (created ? 'current' : '')}" type="button" data-sc-tab="topology"${created ? '' : ' disabled'}><span class="pgp-step-n">3</span><span><b>운영 관리</b><small>${ready ? '모든 replica Ready' : '상태·소비자·보호·이벤트 관리'}</small></span></button>
       </section>
 
@@ -889,18 +891,18 @@ class SambaAdElement extends HTMLElement {
 
       <section class="pgp-description">
         <div><h2>Description</h2><p>Samba-AD plugin은 Foundation의 Identity Directory 계약을 확인한 뒤 AD DC operand를 생성합니다. 운영자는 같은 화면에서 실행 기반, 설치 구성, 토폴로지, 소비자, 보호 정책, 이벤트와 업그레이드를 관리합니다.</p></div>
-        <div><h2>Documentation</h2><a href="/manual?doc=${encodeURIComponent('plugin:samba-ad/operations')}">OpenSphere Samba-AD 설치·운영 안내서 (한글)</a><a href="https://www.samba.org/samba/docs/" target="_blank" rel="noreferrer">Samba documentation</a><button class="btn btn-sm btn-link" type="button" data-sc-tab="plan">OpenSphere 설치 계약 보기</button></div>
+        <div><h2>Documentation</h2><a href="/manual?doc=${encodeURIComponent('plugin:samba-ad/operations')}">OpenSphere Samba-AD 설치·운영 안내서 (한글)</a><a href="https://www.samba.org/samba/docs/" target="_blank" rel="noreferrer">Samba documentation</a><button class="btn btn-sm btn-link" type="button" data-sc-tab="cluster">OpenSphere 설치 계약 보기</button></div>
       </section>`;
   }
 
   lifecycleGate(activeTab, lifecycle) {
     const labels = {
-      topology: 'Topology', consumers: 'Consumers', protection: 'Backup & Security',
-      events: 'Events', upgrade: 'Upgrade',
+      topology: 'Topology', configuration: 'Configuration', directory: 'Directory & Roles',
+      backups: 'Backups', events: 'Events', claims: 'Claims', upgrade: 'Upgrade',
     };
     return `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Lifecycle gate</span><h2>${esc(labels[activeTab] || '운영 관리')}</h2></div><span class="label label-warning">${esc(lifecycle)}</span></div>
       <div class="alert alert-warning"><div class="alert-items"><div class="alert-item static"><span class="alert-text">AD DC operand 설치가 완료되면 이 탭에서 실제 운영 데이터를 확인할 수 있습니다. 먼저 실행 기반과 설치·운영 구성을 완료하세요.</span></div></div></div>
-      <div class="os-actions"><button class="btn btn-sm" data-sc-tab="dependency">실행 기반</button><button class="btn btn-sm btn-primary" data-sc-tab="plan">설치·운영 구성</button></div>
+      <div class="os-actions"><button class="btn btn-sm" data-sc-tab="operator">Operator</button><button class="btn btn-sm btn-primary" data-sc-tab="cluster">Cluster plan</button></div>
     </div>`;
   }
 
@@ -922,11 +924,11 @@ class SambaAdElement extends HTMLElement {
       ? 'Foundation이 서명된 package, 의존성, 설치 계약을 검증한 뒤 AD DC operand 생성을 허용합니다.'
       : '관리자가 설치 입력을 확정하면 Foundation control-plane이 AD DC operand 선언을 적용합니다.';
     const content = activeTab === 'overview' ? this.lifecycleOverview(d, lifecycle)
-      : activeTab === 'dependency' ? `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Internal dependency</span><h2>실행 기반</h2></div>${this.lifecycleBadge(d.preflight)}</div>${this.preflight(d)}<div class="card"><div class="card-header">Foundation installation process</div><div class="card-block">${this.foundationProcess(d)}</div></div></div>`
-      : activeTab === 'plan' ? this.installWorkspace(d)
+      : activeTab === 'operator' ? `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Internal dependency</span><h2>Foundation installer</h2></div>${this.lifecycleBadge(d.preflight)}</div>${this.preflight(d)}<div class="card"><div class="card-header">Foundation installation process</div><div class="card-block">${this.foundationProcess(d)}</div></div></div>`
+      : activeTab === 'cluster' ? this.installWorkspace(d)
       : activeTab === 'documentation' ? this.lifecycleDocumentation()
       : this.lifecycleGate(activeTab, lifecycle);
-    this.innerHTML = `<section class="pgp-page-frame">${this.pluginHeader(d, lifecycle === 'preflight' ? 'Preflight' : 'Install', description)}${this.manageNav(activeTab)}</section>${content}`;
+    this.innerHTML = `<a class="vl-back" href="/p/foundation/modules" data-sc-back>← PFS 모듈</a><section class="pgp-page-frame">${this.pluginHeader(d, lifecycle === 'preflight' ? 'Operator required' : 'Install', description)}${this.manageNav(activeTab, d)}</section>${content}`;
   }
 
   renderInstall(d) { this.renderLifecycle(d, 'install'); }
@@ -1049,7 +1051,14 @@ class SambaAdElement extends HTMLElement {
     const eventsHtml = `<div class="os-sech">Events <span class="os-sub">Kubernetes events</span></div>${eventRows ? `<table class="table"><thead><tr><th>Type</th><th>Reason</th><th>Message</th><th>Time</th></tr></thead><tbody>${eventRows}</tbody></table>` : '<p class="os-sub">No recent events.</p>'}`;
 
     const dependencyHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Internal dependency</span><h2>실행 기반</h2></div>${this.lifecycleBadge(d.preflight)}</div>${this.preflight(d)}<div class="card"><div class="card-header">Foundation installation process</div><div class="card-block">${this.foundationProcess(d)}</div></div></div>`;
-    const topologyHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Runtime</span><h2>Topology & workloads</h2></div><span class="label ${phasePill}">${esc(phase)}</span></div>${notDeployed}${overviewHtml}${metricsHtml}</div>`;
+    const topologyHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Runtime</span><h2>Topology & workloads</h2></div><span class="label ${phasePill}">${esc(phase)}</span></div>${notDeployed}${relationHtml}${metricsHtml}</div>`;
+    const directoryHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Directory surface</span><h2>Directory & Roles</h2></div><span class="label label-info">External administration</span></div><div class="card"><div class="card-header">Directory authority</div><div class="card-block"><table class="table"><tbody>${this.kv([
+      ['Realm', `<span class="os-mono">${esc(realm)}</span>`],
+      ['Base DN', `<span class="os-mono">${esc(baseDn)}</span>`],
+      ['LDAP endpoint', `<span class="os-mono">${esc(m.ldapURL || '-')}</span>`],
+      ['Users, groups and roles', 'samba-tool / RSAT managed'],
+      ['Console boundary', 'Readiness and binding references only'],
+    ])}</tbody></table><p class="os-sub">PostgreSQL의 Databases & Roles와 같은 수명주기 위치이지만, AD 객체 변경은 디렉터리 전용 관리 도구가 담당합니다.</p></div></div></div>`;
     const consumersHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Northbound contract</span><h2>Consumers</h2></div></div>${relationHtml}<div class="alert alert-info"><div class="alert-items"><div class="alert-item static"><span class="alert-text">소비자는 bind password를 직접 전달받지 않고 IdentityDirectoryClaim/Binding의 endpointRef·secretRef·policyRef를 통해 연결합니다.</span></div></div></div></div>`;
     const protectionHtml = `<div class="pgp-workspace"><div class="pgp-section-head"><div><span class="vl-eyebrow">Protection policy</span><h2>Backup & Security</h2></div></div>${backupHtml}<div class="card"><div class="card-header">Security boundary</div><div class="card-block"><table class="table"><tbody>${this.kv([
       ['Exposure', 'ClusterIP only · external LDAP/SMB exposure prohibited by default'],
@@ -1071,20 +1080,23 @@ class SambaAdElement extends HTMLElement {
 
     const content = {
       overview: overviewHtml,
-      dependency: dependencyHtml,
-      plan: configHtml,
+      operator: dependencyHtml,
+      cluster: configHtml,
       topology: topologyHtml,
-      consumers: consumersHtml,
-      protection: protectionHtml,
+      configuration: configHtml,
+      directory: directoryHtml,
+      backups: protectionHtml,
       events: `${eventsHtml}${logsHtml}`,
+      claims: consumersHtml,
       upgrade: upgradeHtml,
       documentation: documentationHtml,
     }[activeTab] || overviewHtml;
 
     this.innerHTML = `
+      <a class="vl-back" href="/p/foundation/modules" data-sc-back>← PFS 모듈</a>
       <section class="pgp-page-frame">
         ${this.pluginHeader(d, 'Manage', `Workforce directory / Samba Active Directory DC / realm ${realm} / served by ${d.meta?.servedBy || 'plugin backend'}`)}
-        ${this.manageNav(activeTab)}
+        ${this.manageNav(activeTab, d)}
       </section>
       ${content}`;
   }
