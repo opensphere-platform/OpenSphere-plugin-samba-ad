@@ -10,7 +10,7 @@ LABEL org.opencontainers.image.title="OpenSphere Samba AD Plugin" \
       io.opensphere.module.descriptor.key-id="opensphere-plugins-v4"
 RUN apk upgrade --no-cache \
     && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
-ENV PORT=8080 PLUGIN_DIR=/plugins APP_VERSION=0.1.1-edge.7 \
+ENV PORT=8080 PLUGIN_DIR=/plugins APP_VERSION=0.1.1-edge.8 \
     NODE_EXTRA_CA_CERTS=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
 WORKDIR /app
 COPY server.js /app/server.js

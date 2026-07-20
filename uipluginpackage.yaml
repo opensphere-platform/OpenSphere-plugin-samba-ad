@@ -16,7 +16,7 @@ spec:
   hostCompat: ">=1.0.0 <2.0.0"
   displayName: "Samba-AD"
   owner: platform-foundation
-  version: 0.1.1-edge.7
+  version: 0.1.1-edge.8
   description: "Workspace directory management plugin for Samba AD DC, mounted inside Foundation."
   serviceAccountName: opensphere-plugin-samba-ad
   image:

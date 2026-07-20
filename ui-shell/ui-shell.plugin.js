@@ -85,6 +85,14 @@ function sparkline(points, w = 280, h = 44, color = '#4c6fff') {
 
 class SambaAdElement extends HTMLElement {
   connectedCallback() {
+    // Native Angular pages (including PostgreSQL) render through a block-level
+    // component host.  A framework-neutral custom element is inline by default,
+    // which collapses its grid/dashboard to content width inside Foundation.
+    // Own the same page-host contract here so ADDC keeps the PostgreSQL full-width
+    // layout regardless of which Foundation shell version mounts the plugin.
+    this.style.display = 'block';
+    this.style.width = '100%';
+    this.style.minWidth = '0';
     this.innerHTML = '<p class="os-sub">Samba-AD 불러오는 중… <span class="spinner spinner-inline"></span></p>';
     this._onPopstate = () => this._load().then(() => this._afterRenderLoads());
     window.addEventListener('popstate', this._onPopstate);
