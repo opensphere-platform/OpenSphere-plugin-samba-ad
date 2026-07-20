@@ -16,7 +16,7 @@ spec:
   hostCompat: ">=1.0.0 <2.0.0"
   displayName: "Samba-AD"
   owner: platform-foundation
-  version: 0.1.1-edge.3
+  version: 0.1.1-edge.4
   description: "Workspace directory management plugin for Samba AD DC, mounted inside Foundation."
   serviceAccountName: opensphere-plugin-samba-ad
   image:
@@ -27,7 +27,7 @@ spec:
     label: "Samba-AD"
   manifest:
     path: /plugins/ui-shell.manifest.json
-    sha256: "66bef4ab2fe3f246570ed355084987a787d8b16a27f6e2ee65cba118dbe0eb72"
+    sha256: "8adc69e13af3ab6a72b6f1bbfef823709dd0589d93a652d90c1acc6669ce780e"
     signaturePath: /plugins/ui-shell.manifest.json.sig
   trust:
     keyId: opensphere-plugins-v4

@@ -29,6 +29,13 @@ check('ui: common header and tabs persist across lifecycle states',
   /renderLifecycle\(d, lifecycle\)/.test(uiShell) && /pluginHeader\(d,[\s\S]{0,240}manageNav\(activeTab\)/.test(uiShell));
 check('ui: install completion returns to canonical overview',
   uiShell.includes("this.managePath('overview')") && !uiShell.includes('stageUrl('));
+check('ui: retained custom element reads refreshed host capability context',
+  uiShell.includes("Symbol.for('opensphere.plugin.samba-ad.runtime')") &&
+  uiShell.includes('RUNTIME.apiFetch') && !uiShell.includes('let API_FETCH'));
+check('ui: PostgreSQL reference overview structure is reused exactly',
+  /class="pgp-steps"/.test(uiShell) && /class="pgp-dashboard"/.test(uiShell) &&
+  /<h2>Package readiness<\/h2>/.test(uiShell) && /<h2>Directory health<\/h2>/.test(uiShell) &&
+  /<h2>Operations policy<\/h2>/.test(uiShell) && /class="pgp-description"/.test(uiShell));
 
 // ② entrySha256 == sha256(entry)
 const manifest = JSON.parse(read('ui-shell/ui-shell.manifest.json').toString());

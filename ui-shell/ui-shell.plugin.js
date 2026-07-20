@@ -9,17 +9,21 @@
 // 모든 동적 값은 esc() 이스케이프(XSS 방지). API는 ctx.api.baseUrl(셸 관문 §11)만 사용.
 
 const TAG = 'osp-samba-ad';
-let API_BASE = '';
-let API_FETCH = null;
+// customElements 정의는 같은 태그로 교체할 수 없다. Extension Host가 registry 갱신 중
+// 모듈을 deactivate/re-import하더라도 최초 constructor가 최신 권한 context를 읽도록
+// 재-import 간에 공유되는 안정된 runtime slot을 사용한다.
+const RUNTIME_KEY = Symbol.for('opensphere.plugin.samba-ad.runtime');
+const RUNTIME = globalThis[RUNTIME_KEY] || (globalThis[RUNTIME_KEY] = { apiBase: '', apiFetch: null, owner: null });
+let ACTIVE_OWNER = null;
 const SAMBA_LOGO_URL = 'https://logos.opl.io.kr/i/samba-server';
 
 // 설정 저장 = FM/identity.spec.parameters.samba(foundation 도메인 자원) → foundation host의 검증된 write-path
 // (Main Shell이 ctx.api.fetch에 인증을 주입하고 server.js가 검증) 재사용. plugin은 폼·스키마·operand 렌더를 소유하되,
 // 도메인 자원 write는 최소권한 원칙상 foundation 경로로(플러그인 SA에 impersonate 권한 미부여).
-function foundationApiBase() { return API_BASE.replace(/\/plugins\/samba-ad$/, '/plugins/foundation'); }
+function foundationApiBase() { return RUNTIME.apiBase.replace(/\/plugins\/samba-ad$/, '/plugins/foundation'); }
 function hostFetch(input, init) {
-  if (typeof API_FETCH !== 'function') return Promise.reject(new Error('Host API fetch capability is unavailable'));
-  return API_FETCH(input, init);
+  if (typeof RUNTIME.apiFetch !== 'function') return Promise.reject(new Error('Host API fetch capability is unavailable'));
+  return RUNTIME.apiFetch(input, init);
 }
 
 function isAuthFail(status, body) {
@@ -586,8 +590,8 @@ class SambaAdElement extends HTMLElement {
 
   pluginHeader(d, lifecycle, description) {
     const image = String(d?.workload?.image || '');
-    const version = image ? image.split('@')[0].split(':').pop() : 'bundle-pinned';
-    const profile = lifecycle === 'Manage' ? 'managed' : 'installation';
+    const version = image ? image.split('@')[0].split(':').pop() : (d?.meta?.version || 'bundle-pinned');
+    const profile = 'development';
     const namespace = d?.meta?.ns || 'opensphere-foundation';
     const lifecycleClass = lifecycle === 'Manage' ? 'label-success'
       : (lifecycle === 'Install' ? 'label-info' : 'label-warning');
@@ -602,7 +606,7 @@ class SambaAdElement extends HTMLElement {
       </div>
       <dl class="pfs-plugin-release">
         <div><dt>Lifecycle</dt><dd><span class="label ${lifecycleClass}">${esc(lifecycle)}</span></dd></div>
-        <div><dt>Version</dt><dd>${esc(version)}</dd></div>
+        <div><dt>Samba-AD</dt><dd>${esc(version)}</dd></div>
         <div><dt>Profile</dt><dd>${esc(profile)}</dd></div>
         <div><dt>Namespace</dt><dd class="os-mono">${esc(namespace)}</dd></div>
       </dl>
@@ -824,36 +828,69 @@ class SambaAdElement extends HTMLElement {
   lifecycleOverview(d, lifecycle) {
     const pf = d.preflight || {};
     const w = d.workload || {};
-    const preflightDone = lifecycle !== 'preflight';
-    const installDone = lifecycle === 'manage';
-    const nextTab = lifecycle === 'preflight' ? 'dependency' : (lifecycle === 'install' ? 'plan' : 'topology');
-    const nextLabel = lifecycle === 'preflight' ? '필수 조건 확인' : (lifecycle === 'install' ? '설치 입력 열기' : '운영 상태 열기');
     const blockers = Number(pf.blockers || 0);
-    return `<div class="pgp-workspace">
-      <div class="pgp-steps">
-        <button class="pgp-step ${preflightDone ? 'done' : 'current'}" type="button" data-sc-tab="dependency"><span class="pgp-step-n">1</span><span><b>실행 기반 준비</b><small>서명·권한·Claim/Binding·스토리지</small></span></button>
-        <button class="pgp-step ${installDone ? 'done' : (lifecycle === 'install' ? 'current' : '')}" type="button" data-sc-tab="plan"><span class="pgp-step-n">2</span><span><b>서비스 구성</b><small>realm·replica·DNS·영구 저장소</small></span></button>
-        <button class="pgp-step ${lifecycle === 'manage' ? 'current' : ''}" type="button" data-sc-tab="topology"><span class="pgp-step-n">3</span><span><b>운영 관리</b><small>상태·소비자·보호·이벤트</small></span></button>
-      </div>
-      <div class="clr-row">
-        ${this.card('Lifecycle', `<table class="table table-compact"><tbody>${this.kv([
-          ['Current state', this.lifecycleBadge(pf)],
-          ['Preflight blockers', `<span class="label ${blockers ? 'label-danger' : 'label-success'}">${esc(blockers)}</span>`],
-          ['Warnings', `<span class="label ${pf.warnings ? 'label-warning' : 'label-success'}">${esc(pf.warnings || 0)}</span>`],
-          ['Apply owner', 'Foundation control-plane (SSA)'],
-        ])}</tbody></table>`) }
-        ${this.card('AD DC service', `<table class="table table-compact"><tbody>${this.kv([
-          ['Realm', `<span class="os-mono">${esc((d.config || {}).domain || 'OPENSPHERE.LOCAL')}</span>`],
-          ['Workload', w.found ? `<span class="label ${w.ready ? 'label-success' : 'label-warning'}">${w.ready ? 'Running' : 'Starting'}</span> ${esc(`${w.readyReplicas || 0}/${w.replicas || 0}`)}` : '<span class="label label-warning">Not deployed</span>'],
-          ['Namespace', `<span class="os-mono">${esc(d?.meta?.ns || 'opensphere-foundation')}</span>`],
-          ['Data', '<span class="os-mono">foundation-identity-samba-data</span> PVC'],
-        ])}</tbody></table>`) }
-      </div>
-      <div class="card"><div class="card-block"><h3 class="card-title">다음 작업</h3>
-        <p class="os-sub">수명주기 상태는 별도 화면이 아니라 이 공통 관리 흐름의 상태입니다. 상단 탭은 설치 전·후 동일하게 유지됩니다.</p>
-        <div class="os-actions"><button class="btn btn-sm btn-primary" data-sc-tab="${esc(nextTab)}">${esc(nextLabel)}</button><a class="btn btn-sm" href="/manual?doc=${encodeURIComponent('plugin:samba-ad/operations')}">한글 안내서</a></div>
-      </div></div>
-    </div>`;
+    const prerequisiteReady = blockers === 0;
+    const created = !!w.found;
+    const ready = !!w.ready;
+    const replicas = Number(w.replicas || 0);
+    const readyReplicas = Number(w.readyReplicas || 0);
+    const availability = replicas > 0 ? Math.round((readyReplicas / replicas) * 100) : 0;
+    const phase = created ? (ready ? 'Running' : 'Starting') : '미생성';
+    const cfg = d.config || {};
+    const backup = d.backup || {};
+    const monitoring = (pf.checks || []).some((c) => c.id === 'metrics' && c.state === 'pass');
+    const nextTab = !prerequisiteReady ? 'dependency' : (!created ? 'plan' : 'topology');
+    const nextLabel = !prerequisiteReady ? '전제조건 확인' : (!created ? 'AD DC 구성' : '상태 새로고침');
+    return `
+      <section class="pgp-steps" aria-label="Samba-AD plugin 설치 단계">
+        <button class="pgp-step ${prerequisiteReady ? 'done' : 'current'}" type="button" data-sc-tab="dependency"><span class="pgp-step-n">1</span><span><b>실행 기반 준비</b><small>${prerequisiteReady ? '필수 계약 Ready' : '서명·권한·Claim/Binding 확인 필요'}</small></span></button>
+        <button class="pgp-step ${created ? 'done' : (prerequisiteReady ? 'current' : '')}" type="button" data-sc-tab="plan"><span class="pgp-step-n">2</span><span><b>AD DC 생성</b><small>${created ? 'Directory operand 생성됨' : 'realm·replica·DNS·스토리지 구성'}</small></span></button>
+        <button class="pgp-step ${ready ? 'done' : (created ? 'current' : '')}" type="button" data-sc-tab="topology"${created ? '' : ' disabled'}><span class="pgp-step-n">3</span><span><b>운영 관리</b><small>${ready ? '모든 replica Ready' : '상태·소비자·보호·이벤트 관리'}</small></span></button>
+      </section>
+
+      <section class="pgp-dashboard">
+        <article class="pgp-panel">
+          <h2>Package readiness</h2>
+          <p>설치 수명주기의 실제 상태만 표시합니다.</p>
+          <div class="pgp-status-list">
+            <div><span>PFS Control Plane</span><b class="${prerequisiteReady ? 'ok' : ''}">${prerequisiteReady ? 'Ready' : 'Required'}</b></div>
+            <div><span>AD DC prerequisites</span><b class="${prerequisiteReady ? 'ok' : ''}">${prerequisiteReady ? 'Ready' : `${esc(blockers)} blocked`}</b></div>
+            <div><span>Samba-AD Directory</span><b class="${created ? 'ok' : ''}">${esc(phase)}</b></div>
+            <div><span>Managed replicas</span><b class="${ready ? 'ok' : ''}">${esc(readyReplicas)} / ${esc(replicas)}</b></div>
+          </div>
+          <button class="btn btn-sm ${created ? '' : 'btn-primary'}" type="button" data-sc-tab="${esc(nextTab)}">${esc(nextLabel)}</button>
+        </article>
+
+        <article class="pgp-panel">
+          <h2>Directory health</h2>
+          <p>Samba-AD가 보고한 LDAP 가용성과 현재 DC 상태입니다.</p>
+          <div class="pgp-health"><strong>${esc(availability)}%</strong><span>replicas ready</span><progress value="${esc(readyReplicas)}" max="${esc(replicas || 1)}" aria-label="Samba-AD replica 가용성"></progress></div>
+          <dl class="os-kv">
+            <dt>Active DC</dt><dd class="os-mono">${esc(w.node || w.name || '—')}</dd>
+            <dt>Realm</dt><dd class="os-mono">${esc(cfg.domain || 'OPENSPHERE.LOCAL')}</dd>
+            <dt>Storage</dt><dd>3Gi · ${esc(cfg.storageClass || 'standard')}</dd>
+            <dt>Image</dt><dd class="os-mono">${esc(w.image || '—')}</dd>
+          </dl>
+        </article>
+
+        <article class="pgp-panel">
+          <h2>Operations policy</h2>
+          <p>생성 선언에 포함된 보호·접속·관측 정책입니다.</p>
+          <div class="pgp-policy-grid">
+            <div><span>Directory access</span><b>Cluster internal</b></div>
+            <div><span>Monitoring</span><b class="${monitoring ? 'ok' : ''}">${monitoring ? 'Enabled' : 'Pending'}</b></div>
+            <div><span>Backup</span><b class="${backup.schedule ? 'ok' : ''}">${backup.schedule ? 'Configured' : 'Not configured'}</b></div>
+            <div><span>Credentials</span><b class="ok">Secret managed</b></div>
+            <div><span>LDAP security</span><b>${created ? 'LDAPS / Kerberos' : 'Pending'}</b></div>
+            <div><span>Consumer</span><b class="${d.keycloak?.ready ? 'ok' : ''}">${d.keycloak?.ready ? 'Keycloak ready' : 'Binding pending'}</b></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="pgp-description">
+        <div><h2>Description</h2><p>Samba-AD plugin은 Foundation의 Identity Directory 계약을 확인한 뒤 AD DC operand를 생성합니다. 운영자는 같은 화면에서 실행 기반, 설치 구성, 토폴로지, 소비자, 보호 정책, 이벤트와 업그레이드를 관리합니다.</p></div>
+        <div><h2>Documentation</h2><a href="/manual?doc=${encodeURIComponent('plugin:samba-ad/operations')}">OpenSphere Samba-AD 설치·운영 안내서 (한글)</a><a href="https://www.samba.org/samba/docs/" target="_blank" rel="noreferrer">Samba documentation</a><button class="btn btn-sm btn-link" type="button" data-sc-tab="plan">OpenSphere 설치 계약 보기</button></div>
+      </section>`;
   }
 
   lifecycleGate(activeTab, lifecycle) {
@@ -956,35 +993,7 @@ class SambaAdElement extends HTMLElement {
       </div>
     </div></div>`;
 
-    const overviewSteps = `<div class="pgp-steps">
-      <button class="pgp-step done" type="button" data-sc-tab="dependency"><span class="pgp-step-n">1</span><span><b>실행 기반 준비</b><small>서명·권한·Claim/Binding·스토리지</small></span></button>
-      <button class="pgp-step done" type="button" data-sc-tab="plan"><span class="pgp-step-n">2</span><span><b>서비스 구성</b><small>realm·replica·DNS·영구 저장소</small></span></button>
-      <button class="pgp-step ${w.ready ? 'done' : 'current'}" type="button" data-sc-tab="topology"><span class="pgp-step-n">3</span><span><b>운영 관리</b><small>상태·소비자·보호·이벤트</small></span></button>
-    </div>`;
-    const overviewHtml = `${overviewSteps}${notDeployed}${relationHtml}<div class="clr-row">
-      ${this.card(`Directory workload <span class="os-mono">${esc('foundation-identity-samba')}</span>`, `
-        <table class="table"><tbody>${this.kv([
-          ['Status', `<span class="label ${phasePill}">${esc(phase)}</span> ${w.found ? esc(`${w.readyReplicas}/${w.replicas} ready`) : ''}`],
-          ['Image', `<span class="os-mono">${esc(w.image)}</span>`],
-          ['Node / Restarts', esc(`${w.node ?? '-'} / ${w.restarts ?? '-'}`)],
-          ['Persistent data', `<span class="os-mono">PVC foundation-identity-samba-data</span>`],
-        ])}</tbody></table>`)}
-      ${this.card('Directory endpoints', `
-        <table class="table"><tbody>${this.kv([
-          ['LDAP', `<span class="os-mono">${esc(m.ldapURL)}</span>`],
-          ['Base DN', `<span class="os-mono">${esc(baseDn)}</span>`],
-          ['LDAPS / Kerberos', '<span class="os-mono">:636 / :88</span>'],
-          ['DNS / SMB', '<span class="os-mono">:53(tcp/udp) / :445</span>'],
-        ])}</tbody></table>`)}
-      ${this.card(`FoundationModel/identity <span class="label ${m.phase === 'Installed' ? 'label-success' : 'label-warning'}">${esc(m.phase)}</span>`, m.found ? `
-        <table class="table"><thead><tr><th>Signal</th><th>Value</th><th>Source</th></tr></thead><tbody>${observedRows || '<tr><td colspan="3">No observed signals.</td></tr>'}</tbody></table>
-        <p class="os-sub">Observed at ${esc(m.observedAt)} / ${esc(m.controlPlane)}</p>` : '<p class="os-sub">FoundationModel/identity is not readable.</p>')}
-      ${this.card('Consumer: Keycloak federation', `
-        <table class="table"><tbody>${this.kv([
-          ['Keycloak', `<span class="label ${d.keycloak?.found ? pill(d.keycloak.ready, true) : ''}">${d.keycloak?.found ? (d.keycloak.ready ? 'Running' : 'Starting') : 'Not deployed'}</span> <span class="os-mono">${esc(d.keycloak?.name)}</span>`],
-          ['Binding', `User Federation -> LDAP(<span class="os-mono">${esc(m.ldapURL)}</span>)`],
-        ])}</tbody></table>`)}
-    </div>`;
+    const overviewHtml = `${this.lifecycleOverview(d, 'manage')}${w.found ? relationHtml : ''}`;
 
     const configHtml = `<div class="os-sech">Configuration</div>
       <div class="clr-row">
@@ -1157,8 +1166,10 @@ const MANUAL_DOCS = [
 
 /** §9 계약: 셸 Extension Host가 호출하는 진입점 */
 export function activate(ctx) {
-  API_BASE = ctx.api?.baseUrl ?? '';
-  API_FETCH = ctx.api?.fetch ?? null;
+  ACTIVE_OWNER = Symbol('samba-ad-activation');
+  RUNTIME.owner = ACTIVE_OWNER;
+  RUNTIME.apiBase = ctx.api?.baseUrl ?? '';
+  RUNTIME.apiFetch = ctx.api?.fetch ?? null;
   if (!customElements.get(TAG)) customElements.define(TAG, SambaAdElement);
   // hostRef=foundation — registerPage 의도적 미호출(mainShell 1단 비노출, host가 안층 마운트).
   // 매뉴얼 기여(manual:contribute): 설치(로드)와 동시에 자기 매뉴얼을 단일 Manual Registry에 등록.
@@ -1172,6 +1183,10 @@ export function activate(ctx) {
 }
 
 export function deactivate() {
-  API_FETCH = null;
-  API_BASE = '';
+  if (RUNTIME.owner === ACTIVE_OWNER) {
+    RUNTIME.apiFetch = null;
+    RUNTIME.apiBase = '';
+    RUNTIME.owner = null;
+  }
+  ACTIVE_OWNER = null;
 }
