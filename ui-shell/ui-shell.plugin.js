@@ -107,7 +107,7 @@ class SambaAdElement extends HTMLElement {
     const host = this.querySelector('#sc-logs');
     if (!host) return;
     try {
-      const res = await hostFetch(`${API_BASE}/api/logs?minutes=60`, { cache: 'no-store' });
+      const res = await hostFetch(`${RUNTIME.apiBase}/api/logs?minutes=60`, { cache: 'no-store' });
       if (!res.ok) {
         const t = await res.json().catch(() => ({}));
         host.innerHTML = `<div class="vl-log-empty">${esc(t.error || `로그 조회 실패 HTTP ${res.status}`)}</div>`;
@@ -136,7 +136,7 @@ class SambaAdElement extends HTMLElement {
     ];
     try {
       const results = await Promise.all(series.map((x) =>
-        hostFetch(`${API_BASE}/api/metrics/range?q=${encodeURIComponent(x.q)}&minutes=30`, { cache: 'no-store' })
+        hostFetch(`${RUNTIME.apiBase}/api/metrics/range?q=${encodeURIComponent(x.q)}&minutes=30`, { cache: 'no-store' })
           .then((r) => r.ok ? r.json() : null).catch(() => null)));
       const aggregateSeries = (matrix, mode = 'max') => {
         const buckets = new Map();
@@ -192,7 +192,7 @@ class SambaAdElement extends HTMLElement {
       const anyData = results.some((r) => r?.data?.result?.[0]?.values?.length);
       let grafanaHtml = '<div class="card"><div class="card-block"><div class="os-sech">Grafana</div><p class="os-sub">Loading Grafana API information...</p></div></div>';
       try {
-        const gr = await hostFetch(`${API_BASE}/api/grafana`, { cache: 'no-store' });
+        const gr = await hostFetch(`${RUNTIME.apiBase}/api/grafana`, { cache: 'no-store' });
         const g = gr.ok ? await gr.json() : null;
         if (g) {
           const healthLabel = g.health?.ok
@@ -349,7 +349,7 @@ class SambaAdElement extends HTMLElement {
   async _load() {
     if (this._installRunning) return;
     try {
-      const res = await hostFetch(`${API_BASE}/api/samba`, { cache: 'no-store' });
+      const res = await hostFetch(`${RUNTIME.apiBase}/api/samba`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`samba: HTTP ${res.status}`);
       this.render(await res.json());
       this._bindLifecycleActions();
@@ -466,21 +466,21 @@ class SambaAdElement extends HTMLElement {
     try {
       add('info', '설치 입력 확인', `realm=${body.spec.parameters.samba.domain}, dns=${body.spec.parameters.samba.dnsForwarder}, replicas=${body.spec.parameters.samba.replicas}, storageClass=${body.spec.parameters.samba.storageClass}`);
       await checkJson('Plugin 등록 상태 확인', `${foundationApiBase()}/api/k8s/apis/plugins.opensphere.io/v1alpha1/namespaces/opensphere-system/uipluginregistrations/samba-ad`, 'UIPluginRegistration/samba-ad Enabled');
-      await checkJson('CLI 연결 확인', `${API_BASE}/cli/manifest`, 'os ad preflight/status/describe/events manifest 응답 확인');
+      await checkJson('CLI 연결 확인', `${RUNTIME.apiBase}/cli/manifest`, 'os ad preflight/status/describe/events manifest 응답 확인');
       add('info', 'Manual 연결 확인', 'manual:contribute는 plugin activate 시 Manual Registry에 Samba-AD 운영 매뉴얼을 등록합니다.');
       add('pass', 'Manual 연결 확인', 'Samba-AD 운영 매뉴얼 contribution 선언 확인');
       add('info', '검색 연결 확인', 'Manual Registry에 등록된 문서는 통합 검색과 OAA 지식 검색의 입력으로 사용됩니다.');
       add('pass', '검색 연결 확인', 'Manual/OAA 검색 연결 대상 확인');
-      await checkJson('Operand 선언 확인', `${API_BASE}/operand/manifests`, 'PVC/Service/Deployment/NetworkPolicy 선언 렌더 확인');
-      const mr = await hostFetch(`${API_BASE}/metrics`, { cache: 'no-store' });
+      await checkJson('Operand 선언 확인', `${RUNTIME.apiBase}/operand/manifests`, 'PVC/Service/Deployment/NetworkPolicy 선언 렌더 확인');
+      const mr = await hostFetch(`${RUNTIME.apiBase}/metrics`, { cache: 'no-store' });
       if (!mr.ok) throw new Error(`metrics HTTP ${mr.status}`);
-      const pr = await hostFetch(`${API_BASE}/api/metrics/range?q=${encodeURIComponent('samba_ad_up{plugin="samba-ad"}')}&minutes=10`, { cache: 'no-store' });
+      const pr = await hostFetch(`${RUNTIME.apiBase}/api/metrics/range?q=${encodeURIComponent('samba_ad_up{plugin="samba-ad"}')}&minutes=10`, { cache: 'no-store' });
       if (!pr.ok) throw new Error(`prometheus HTTP ${pr.status}`);
       const pj = await pr.json();
       const hasPromSample = (pj.data && Array.isArray(pj.data.result) && pj.data.result.some((s) => Array.isArray(s.values) && s.values.length > 0));
       if (!hasPromSample) throw new Error('prometheus sample missing');
       add('pass', 'Metrics 연결 확인', '/metrics endpoint 및 kube-prometheus-stack sample 확인');
-      await checkJson('Log 연결 확인', `${API_BASE}/api/logs?minutes=5`, 'Loki 기반 로그 조회 endpoint 응답 확인');
+      await checkJson('Log 연결 확인', `${RUNTIME.apiBase}/api/logs?minutes=5`, 'Loki 기반 로그 조회 endpoint 응답 확인');
       add('info', 'FoundationModel 설치 선언', 'engines.samba=enabled 및 desiredState=Installed patch 요청');
       const res = await hostFetch(`${foundationApiBase()}/api/k8s/apis/foundation.opensphere.io/v1alpha1/foundationmodels/identity`, {
         method: 'PATCH',
@@ -496,7 +496,7 @@ class SambaAdElement extends HTMLElement {
       add('pass', 'FoundationModel 설치 선언', '저장 완료. control-plane reconcile 대기');
       let done = false;
       for (let i = 0; i < 40; i += 1) {
-        const r = await hostFetch(`${API_BASE}/api/samba`, { cache: 'no-store' });
+        const r = await hostFetch(`${RUNTIME.apiBase}/api/samba`, { cache: 'no-store' });
         const d = r.ok ? await r.json() : {};
         const pf = d.preflight || {};
         const w = d.workload || {};

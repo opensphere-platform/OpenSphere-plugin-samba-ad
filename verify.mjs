@@ -31,7 +31,7 @@ check('ui: install completion returns to canonical overview',
   uiShell.includes("this.managePath('overview')") && !uiShell.includes('stageUrl('));
 check('ui: retained custom element reads refreshed host capability context',
   uiShell.includes("Symbol.for('opensphere.plugin.samba-ad.runtime')") &&
-  uiShell.includes('RUNTIME.apiFetch') && !uiShell.includes('let API_FETCH'));
+  uiShell.includes('RUNTIME.apiFetch') && !uiShell.includes('API_FETCH') && !uiShell.includes('API_BASE'));
 check('ui: PostgreSQL reference overview structure is reused exactly',
   /class="pgp-steps"/.test(uiShell) && /class="pgp-dashboard"/.test(uiShell) &&
   /<h2>Package readiness<\/h2>/.test(uiShell) && /<h2>Directory health<\/h2>/.test(uiShell) &&
